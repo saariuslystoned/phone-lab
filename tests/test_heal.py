@@ -159,6 +159,26 @@ class HealTests(unittest.TestCase):
         self.assertEqual(res.note["message"], "2 candidates within 10 px of each other at 60 px")
         self.assertEqual(set(res.note.keys()), FAILED_NOTE_KEYS)
 
+    def test_out_of_bound_twins_are_out_of_bound_not_ambiguous(self) -> None:
+        def mutate(cur: dict, inc: dict) -> None:
+            inc["bounds"][1] += 400
+            inc["bounds"][3] += 400
+            twin = copy.deepcopy(inc)
+            twin["i"] = 999
+            twin["bounds"][1] += 5
+            twin["bounds"][3] += 5
+            cur["nodes"].append(twin)
+
+        rec, cur = self._make_trees(mutate)
+        res = heal(PROVEN_INCREMENT_REF, rec, cur)
+        self.assertEqual(res.status, "failed")
+        self.assertEqual(res.note["reason"], "out_of_bound")
+        self.assertEqual(res.note["distance_px"], 400)
+        self.assertEqual(len(res.note["candidates"]), 2)
+        self.assertIsNone(res.ref)
+        self.assertIsNone(res.node)
+        self.assertEqual(set(res.note.keys()), FAILED_NOTE_KEYS)
+
     def test_inclusive_bound(self) -> None:
         def mutate(cur: dict, inc: dict) -> None:
             inc["bounds"][0] += 120

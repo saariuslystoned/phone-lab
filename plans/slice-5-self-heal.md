@@ -78,12 +78,14 @@ the node or the trees) so a step result can embed it directly.
    grid-rounded centres, `round(math.hypot(dx, dy))` as an int.
 5. Rank: tier first (`moved` before `class_changed`), then `distance_px`
    ascending, then node order. The winner is the first.
-6. Ambiguity: if any other candidate in the same tier as the winner has
+6. Bound: if `winner.distance_px > max_distance_px`, the result is
+   `failed` / `out_of_bound`. The bound is checked before ambiguity, so
+   two twins that are both out of bound report `out_of_bound`, not
+   `ambiguous`.
+7. Ambiguity: if any other candidate in the same tier as the winner has
    `distance_px` within 10 px of the winner's (`abs(d - winner_d) <= 10`),
    the result is `failed` / `ambiguous`. Candidates in a lower tier never
    make the winner ambiguous.
-7. Bound: if `winner.distance_px > max_distance_px`, the result is
-   `failed` / `out_of_bound`.
 8. Otherwise `healed`, with `reason` = the winner's tier and `ref` = the
    winner's `"ref"` from `assign_refs`.
 
@@ -212,6 +214,7 @@ assigned after mutation so the current tree's refs and index are fresh):
 | out of bound | bounds shifted +400 px in y | `failed`, `reason "out_of_bound"`, `distance_px 400`, one candidate, `message` names 400 and 120 |
 | no candidate | node deleted | `failed`, `reason "no_candidate"`, `distance_px null`, `candidates []` |
 | ambiguous | node duplicated at x−60 and x+60, original removed | `failed`, `reason "ambiguous"`, two candidates both `distance_px 60` |
+| out-of-bound twins | node shifted +400 px y plus a twin 5 px further | `failed`, `reason "out_of_bound"` (bound wins over ambiguity) |
 | bound is inclusive | shifted +120 px | `healed` |
 | custom bound | shifted +60 px with `max_distance_px=50` | `failed` / `out_of_bound` |
 | to_json | any | keys exactly `{"status", "ref", "note"}` |

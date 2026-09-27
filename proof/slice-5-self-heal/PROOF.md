@@ -17,11 +17,11 @@ loud failure on the Fold" needs replay to exist first.
 
 ## Evidence
 
-- `RUN/unittest.txt`: `python3 -m unittest discover -s tests -v`, 101 tests,
-  OK. The 13 new ones are `tests/test_heal.py::HealTests` (unchanged tree
+- `RUN/unittest.txt`: `python3 -m unittest discover -s tests -v`, 116 tests after the slice-3 merge,
+  OK. The 14 new ones are `tests/test_heal.py::HealTests` (unchanged tree
   via `refs.find`, moved 60 px, class changed, out of bound at 400 px,
   deleted node, ambiguous pair at ±60 px, inclusive bound at 120 px,
-  custom bound 50 px, `to_json` keys, `ValueError` without refs, both
+  custom bound 50 px, out-of-bound twins, `to_json` keys, `ValueError` without refs, both
   trees unchanged, recorded ref absent, empty recorded label). All run on
   `tests/fixtures/tree_cua_fixture_captured.json`, the tree captured on
   the Fold in slice 2 (increment ref `e7f67h`).
@@ -38,8 +38,11 @@ loud failure on the Fold" needs replay to exist first.
 - **Gemini 3.8 Flash wrote** (one job via `antigravity-acp`, job
   `6d4f8990-363c-4e13-bb34-fd2164bcc19b`, permission mode `approve-all`,
   about 3 minutes): `phonelab/heal.py` and `tests/test_heal.py`, from the
-  spec plus a compact prompt. Review found nothing to change: the ranking,
-  tie rule, bound check, note keys and non-mutation all match the spec.
+  spec plus a compact prompt. First review found nothing to change. The slice-3 cockpit's code
+  review found one low-severity ordering bug (ambiguity checked before the
+  bound, so out-of-bound twins reported `ambiguous`); Gemini fixed it in a
+  second job (`8decd048-3d22-4ebf-a3dd-cf8c14b3230a`) with one new test,
+  and the cockpit reordered spec steps 6 and 7 to match.
 
 ## Open for Bobby
 

@@ -155,6 +155,27 @@ def heal(
     winner_tier = winner_entry["tier"]
     winner_d = winner_entry["distance_px"]
 
+    if winner_d > max_distance_px:
+        note = {
+            "kind": "failed",
+            "reason": "out_of_bound",
+            "missing_ref": missing_ref,
+            "ref": None,
+            "max_distance_px": max_distance_px,
+            "distance_px": winner_d,
+            "recorded": recorded_info,
+            "current": None,
+            "candidates": ranked_entries[:20],
+            "message": f"nearest candidate is {winner_d} px away, bound is {max_distance_px} px",
+        }
+        return HealResult(
+            status="failed",
+            ref=None,
+            node=None,
+            note=note,
+            evidence=evidence,
+        )
+
     tied = [
         c_entry
         for c_entry in ranked_entries
@@ -173,27 +194,6 @@ def heal(
             "current": None,
             "candidates": ranked_entries[:20],
             "message": f"{n} candidates within 10 px of each other at {winner_d} px",
-        }
-        return HealResult(
-            status="failed",
-            ref=None,
-            node=None,
-            note=note,
-            evidence=evidence,
-        )
-
-    if winner_d > max_distance_px:
-        note = {
-            "kind": "failed",
-            "reason": "out_of_bound",
-            "missing_ref": missing_ref,
-            "ref": None,
-            "max_distance_px": max_distance_px,
-            "distance_px": winner_d,
-            "recorded": recorded_info,
-            "current": None,
-            "candidates": ranked_entries[:20],
-            "message": f"nearest candidate is {winner_d} px away, bound is {max_distance_px} px",
         }
         return HealResult(
             status="failed",
