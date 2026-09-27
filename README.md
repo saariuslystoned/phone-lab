@@ -14,7 +14,31 @@ Built from scratch around a few needs that existing tools don't cover:
 Foldables and multi-display devices are first-class. Proof is part of the product: every run
 produces evidence a human and an agent can both check.
 
-Status: just started.
+## Status
+
+Slice 1 (live multi-display viewer) is a working prototype, proven on a
+Pixel 10 Pro Fold with a live Cua session: display 0, the (off) cover panel
+and the Cua agent display side by side with measured fps per panel, the Cua
+panel labelled with session label, package, lease and last tap result, and a
+freeze-frame button that writes a labelled composite plus a JSON manifest.
+Display 0 runs well under 1 fps on busy screens; see the known limits in
+[docs/feature-map.md](docs/feature-map.md).
+
+Run it (Python 3.12 plus Pillow, one authorized device on USB):
+
+```bash
+python3 -m unittest discover -s tests -v
+python3 -m phonelab inventory
+python3 -m phonelab serve                      # http://127.0.0.1:8791/
+python3 -m phonelab cua demo --driver /path/to/cua-driver --duration 300 --tap-every 8
+```
+
+Add `--serial S` to every command when more than one device is attached.
+
+- [docs/adr-001-tech-stack.md](docs/adr-001-tech-stack.md) — the stack decision
+- [docs/feature-map.md](docs/feature-map.md) — features, modules, tests, proof, status
+- [plans/roadmap.md](plans/roadmap.md) — slices 1–5
+- [skills/phone-lab-verify/SKILL.md](skills/phone-lab-verify/SKILL.md) — the verification loop
 
 ## License
 

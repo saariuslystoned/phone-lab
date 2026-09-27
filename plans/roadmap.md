@@ -7,17 +7,21 @@ images in `saari-co/public-oss-proof-assets`.
 
 Stack: see [ADR 001](../docs/adr-001-tech-stack.md).
 
-## Slice 1 — Live multi-display viewer (2026-09-26, in progress)
+## Slice 1 — Live multi-display viewer (2026-09-26, prototype proven 2026-09-27)
 
 - [ ] `python3 -m phonelab serve` shows display 0, the cover panel, and every
       Cua virtual display side by side at ~1–2 fps with measured fps per panel.
-- [ ] Each Cua panel is labelled with session label, target package, lease
+      Proven for the side-by-side view and the per-panel fps readout; the Cua
+      display measured 1.4–2.0 fps but display 0 measured 0.25 fps on the
+      wallpaper home screen (4 MB PNG per frame), so the ~1–2 fps claim is not
+      ticked. See `proof/slice-1-live-viewer/PROOF.md`.
+- [x] Each Cua panel is labelled with session label, target package, lease
       remaining, and last action/result from the phone-lab session registry.
-- [ ] Freeze-frame button saves a labelled composite plus a JSON manifest to
+- [x] Freeze-frame button saves a labelled composite plus a JSON manifest to
       `runs/phone-lab-runs/<date>/`, status bar cropped from human panels.
-- [ ] `python3 -m phonelab cua demo` drives the synthetic fixture on a Cua
+- [x] `python3 -m phonelab cua demo` drives the synthetic fixture on a Cua
       display so the viewer can be proven live on the Fold.
-- [ ] Parser tests pass against captured `dumpsys` fixtures; the serial never
+- [x] Parser tests pass against captured `dumpsys` fixtures; the serial never
       appears in UI, logs, manifests, or tests.
 
 Spec: [slice-1-live-viewer.md](slice-1-live-viewer.md).

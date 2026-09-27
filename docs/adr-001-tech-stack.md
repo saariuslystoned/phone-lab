@@ -2,9 +2,15 @@
 
 ## Status
 
-Proposed (2026-09-26). Awaiting Bobby's confirmation; a stack-validation
-spike (slice 1) was built against this proposal so the decision can be made
-on measured behaviour, not on taste.
+Accepted (2026-09-26). Bobby accepted the proposal on the evening of
+2026-09-26; slice 1 was then built on it and proven on the Fold overnight
+(see `proof/slice-1-live-viewer/PROOF.md`). One measured correction to the
+context table below: the inner-panel `screencap -p` cost of ~0.9 s held for
+flat content (a ~240 KB PNG); on the wallpaper home screen the PNG is 4 MB
+and the capture takes 3–4 s, and no screencap transport measured overnight
+(raw, raw+gzip) got it under 1.9 s over the 12 MB/s adb link. The 1–2 fps
+ceiling in Consequences therefore applies to the agent display; display 0
+can be slower, and the viewer shows the measured rate.
 
 ## Context
 
