@@ -5,15 +5,20 @@ import io
 import json
 import re
 import tempfile
+import threading
 import time
+import types
 import unittest
+import urllib.error
+import urllib.request
 from pathlib import Path
+from unittest.mock import patch
 
 from PIL import Image
 
 from phonelab.capture import Frame
 from phonelab.displays import Display
-from phonelab.server import PANEL_HEIGHT, compose, freeze, recent_freezes
+from phonelab.server import PANEL_HEIGHT, bind_viewer, compose, freeze, recent_freezes
 
 
 def _png(width: int, height: int, color: tuple, mode: str = "RGBA") -> bytes:
@@ -54,6 +59,7 @@ class ComposeTests(unittest.TestCase):
         self.assertGreater(image.width, max(120, 100))
         self.assertGreater(image.height, PANEL_HEIGHT)
         self.assertEqual(manifest["schema"], "phone-lab.freeze.v1")
+        self.assertEqual(manifest["panels_included"], "all")
         self.assertEqual(len(manifest["panels"]), 3, "ignored displays are skipped")
         human, agent, off = manifest["panels"]
         self.assertEqual(human["cropped_status_bar_px"], 20)
@@ -69,6 +75,20 @@ class ComposeTests(unittest.TestCase):
         self.assertEqual(off["name"], "Outer Display")
         self.assertEqual(manifest["device"], DEVICE)
         self.assertIsNone(manifest["image"], "compose leaves the file name to freeze()")
+
+    def test_compose_agent_panels_only(self):
+        image, manifest = compose(self.panels, DEVICE, 1_790_000_000.0, {98: SESSION}, panels_included="agent")
+        self.assertEqual(manifest["panels_included"], "agent")
+        self.assertEqual(len(manifest["panels"]), 1)
+        self.assertEqual(manifest["panels"][0]["role"], "agent")
+        names = [p["name"] for p in manifest["panels"]]
+        self.assertNotIn("Inner Display", names)
+        self.assertNotIn("Outer Display", names)
+
+    def test_compose_rejects_invalid_panels(self):
+        with self.assertRaises(ValueError) as ctx:
+            compose(self.panels, DEVICE, 1_790_000_000.0, panels_included="bogus")
+        self.assertEqual(str(ctx.exception), "panels must be agent or all")
 
     def test_human_panel_is_cropped_before_scaling(self):
         image, _ = compose([(HUMAN, _frame(1, self.human_png))], DEVICE, 1_790_000_000.0)
@@ -108,10 +128,12 @@ class FreezeTests(unittest.TestCase):
             first = freeze(_StubManager(panels, {98: SESSION}), DEVICE, Path(tmp))
             second = freeze(_StubManager(panels, {98: SESSION}), DEVICE, Path(tmp))
             self.assertEqual(first["panels"], 2)
+            self.assertEqual(first["panels_included"], "all")
             self.assertTrue(Path(first["image"]).is_file() and Path(first["manifest"]).is_file())
             self.assertNotEqual(first["image"], second["image"], "same-second freezes get distinct names")
             manifest = json.loads(Path(first["manifest"]).read_text())
             self.assertEqual(manifest["image"], Path(first["image"]).name)
+            self.assertEqual(manifest["panels_included"], "all")
             self.assertRegex(Path(first["image"]).parent.name, r"^\d{8}$")
             self.assertRegex(Path(first["image"]).name, r"^freeze-\d{6}(-\d+)?\.png$")
             with Image.open(first["image"]) as composite:
@@ -119,6 +141,58 @@ class FreezeTests(unittest.TestCase):
             recent = recent_freezes(Path(tmp))
             self.assertEqual(len(recent), 2)
             self.assertEqual(recent[0]["image"], Path(second["image"]).name, "newest first")
+
+    def test_freeze_agent_panels_and_recent_freezes(self):
+        panels = [(HUMAN, _frame(3, _png(120, 200, (1, 2, 3, 255)))), (AGENT, _frame(4, _png(100, 180, (4, 5, 6, 255))))]
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch("phonelab.server.time.time", side_effect=[1_790_000_000.0, 1_790_000_005.0]):
+                all_freeze = freeze(_StubManager(panels, {98: SESSION}), DEVICE, Path(tmp))
+                agent_freeze = freeze(_StubManager(panels, {98: SESSION}), DEVICE, Path(tmp), panels_included="agent")
+
+            self.assertEqual(agent_freeze["panels"], 1)
+            self.assertEqual(agent_freeze["panels_included"], "agent")
+            self.assertTrue(Path(agent_freeze["image"]).is_file() and Path(agent_freeze["manifest"]).is_file())
+            self.assertRegex(Path(agent_freeze["image"]).name, r"^freeze-agent-\d{6}(-\d+)?\.png$")
+            self.assertRegex(Path(agent_freeze["manifest"]).name, r"^freeze-agent-\d{6}(-\d+)?\.json$")
+
+            manifest = json.loads(Path(agent_freeze["manifest"]).read_text())
+            self.assertEqual(manifest["panels_included"], "agent")
+            self.assertEqual(len(manifest["panels"]), 1)
+            self.assertEqual(manifest["panels"][0]["role"], "agent")
+
+            recent = recent_freezes(Path(tmp))
+            self.assertEqual(len(recent), 2)
+            self.assertEqual(recent[0]["image"], Path(agent_freeze["image"]).name, "newest first")
+            self.assertEqual(recent[1]["image"], Path(all_freeze["image"]).name)
+
+    def test_http_freeze_endpoint(self):
+        panels = [(HUMAN, _frame(3, _png(120, 200, (1, 2, 3, 255)))), (AGENT, _frame(4, _png(100, 180, (4, 5, 6, 255))))]
+        with tempfile.TemporaryDirectory() as tmp:
+            server = bind_viewer(port=0, adb=types.SimpleNamespace(redact=lambda s: s))
+            server.manager = _StubManager(panels, {98: SESSION})
+            server.device = DEVICE
+            server.runs_dir = Path(tmp)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                base_url = f"http://127.0.0.1:{server.server_address[1]}"
+                req_agent = urllib.request.Request(f"{base_url}/api/freeze?panels=agent", data=b"", method="POST")
+                with urllib.request.urlopen(req_agent) as resp:
+                    self.assertEqual(resp.status, 200)
+                    data = json.loads(resp.read().decode())
+                    self.assertEqual(data["panels_included"], "agent")
+                    self.assertEqual(data["panels"], 1)
+
+                req_bogus = urllib.request.Request(f"{base_url}/api/freeze?panels=bogus", data=b"", method="POST")
+                with self.assertRaises(urllib.error.HTTPError) as ctx:
+                    urllib.request.urlopen(req_bogus)
+                self.assertEqual(ctx.exception.code, 400)
+                body = json.loads(ctx.exception.read().decode())
+                self.assertEqual(body, {"error": "panels must be agent or all"})
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join()
 
 
 if __name__ == "__main__":
