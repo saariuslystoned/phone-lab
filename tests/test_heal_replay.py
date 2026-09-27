@@ -49,6 +49,19 @@ class ShiftedBackend(FakeBackend):
         return t
 
 
+class FailingTreeBackend(FakeBackend):
+    def __init__(self, fail_after_calls: int = 2, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.fail_after_calls = fail_after_calls
+        self.tree_calls = 0
+
+    def tree(self, logical_id: int) -> dict:
+        self.tree_calls += 1
+        if self.tree_calls > self.fail_after_calls:
+            return {"ok": False, "error": "no windows", "display_id": logical_id, "nodes": []}
+        return super().tree(logical_id)
+
+
 class HealReplayTests(unittest.TestCase):
     def _make_trail_with_recorded(self, tmp: Path) -> Path:
         trail = load_trail(FIXTURE_TRAIL_PATH)
@@ -186,6 +199,32 @@ class HealReplayTests(unittest.TestCase):
             self.assertIn("trail has no recorded node, re-record to enable healing", step1["result"]["message"])
             self.assertNotIn("heal", step1["trees"])
             self.assertNotIn("heal", step1["result"]["detail"])
+            self.assertEqual(backend.counter, 0)
+
+    def test_tree_not_ok_fails_step(self) -> None:
+        backend = FailingTreeBackend()
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            runs_dir = tmp_path / "runs"
+            registry = Registry(runs_dir, "pixel-10-pro-fold")
+            trail_path = self._make_trail_with_recorded(tmp_path)
+
+            ret = replay(backend, registry, runs_dir, trail_path)
+            self.assertEqual(ret, 1)
+
+            runs = list_runs(runs_dir)
+            self.assertEqual(len(runs), 1)
+            run_id = runs[0]["run_id"]
+
+            run_doc = load_run(runs_dir, run_id)
+            self.assertEqual(run_doc["result"]["status"], "fail")
+            self.assertNotEqual(run_doc["result"]["status"], "aborted")
+
+            step1 = load_step(runs_dir, run_id, 1)
+            self.assertEqual(step1["result"]["status"], "fail")
+            self.assertIn("heal skipped", step1["result"]["message"])
+            self.assertNotIn("heal", step1["result"]["detail"])
+            self.assertNotIn("heal", step1["trees"])
             self.assertEqual(backend.counter, 0)
 
 

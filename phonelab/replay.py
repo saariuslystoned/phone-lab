@@ -712,33 +712,37 @@ class Runner:
             ref = step.action.get("ref", "")
             node = find(tree_before, ref)
             if node is None:
-                recorded_spec = step.action.get("recorded")
-                ref_count = len([n for n in tree_before.get("nodes", []) if n.get("ref")])
-                if not recorded_spec:
+                if not tree_before.get("ok") or "refs" not in tree_before:
                     status = "fail"
-                    message = f"ref {ref} not found in tree ({ref_count} refs); trail has no recorded node, re-record to enable healing"
+                    message = f"ref {ref} not found: tree read failed ({tree_before.get('error') or 'no refs'}); heal skipped"
                 else:
-                    recorded_node = dict(recorded_spec)
-                    recorded_node["ref"] = ref
-                    recorded_tree = {"nodes": [recorded_node], "refs": {"count": 1, "refs": {ref: 0}}}
-                    res = heal(ref, recorded_tree, tree_before, max_distance_px=self.max_heal_px)
-                    recorded_file = writer.write_tree(index, "recorded", display_id, recorded_tree)
-                    current_file = writer.write_tree(index, "current", display_id, tree_before)
-                    trees_heal = {"recorded": recorded_file, "current": current_file}
-                    result_detail["heal"] = res.to_json()
-                    note = res.note
-                    if res.status == "healed":
-                        node = res.node
-                        status = "healed"
-                        message = f"ref {ref} healed: {note['reason']} {note['distance_px']} px"
-                        action_detail["ref_used"] = res.ref
-                        if kind == "tap":
-                            tap_x, tap_y = tap_point(node)
-                        elif kind == "set_text":
-                            node_index = node.get("i", 0)
-                    else:
+                    recorded_spec = step.action.get("recorded")
+                    ref_count = len([n for n in tree_before.get("nodes", []) if n.get("ref")])
+                    if not recorded_spec:
                         status = "fail"
-                        message = f"ref {ref} missing: {note['reason']} ({note['message']}); trees {recorded_file} and {current_file}"
+                        message = f"ref {ref} not found in tree ({ref_count} refs); trail has no recorded node, re-record to enable healing"
+                    else:
+                        recorded_node = dict(recorded_spec)
+                        recorded_node["ref"] = ref
+                        recorded_tree = {"nodes": [recorded_node], "refs": {"count": 1, "refs": {ref: 0}}}
+                        res = heal(ref, recorded_tree, tree_before, max_distance_px=self.max_heal_px)
+                        recorded_file = writer.write_tree(index, "recorded", display_id, recorded_tree)
+                        current_file = writer.write_tree(index, "current", display_id, tree_before)
+                        trees_heal = {"recorded": recorded_file, "current": current_file}
+                        result_detail["heal"] = res.to_json()
+                        note = res.note
+                        if res.status == "healed":
+                            node = res.node
+                            status = "healed"
+                            message = f"ref {ref} healed: {note['reason']} {note['distance_px']} px"
+                            action_detail["ref_used"] = res.ref
+                            if kind == "tap":
+                                tap_x, tap_y = tap_point(node)
+                            elif kind == "set_text":
+                                node_index = node.get("i", 0)
+                        else:
+                            status = "fail"
+                            message = f"ref {ref} missing: {note['reason']} ({note['message']}); trees {recorded_file} and {current_file}"
             else:
                 if derive:
                     step.action["recorded"] = {k: node[k] for k in RECORDED_NODE_KEYS if k in node}

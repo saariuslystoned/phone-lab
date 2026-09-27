@@ -171,6 +171,16 @@ on disk when it moves 340 px (status `fail`, reason `out_of_bound`, run
   `__main__.py`, fake driver signature), the viewer badge fix, all device
   runs, the viewer check, feature map and roadmap updates, this packet.
 
+## Review fix (PR 9)
+
+- Cockpit review from the slice-1 session: a non-`ok` tree reply (no
+  `refs` key) made `heal()` raise `ValueError` inside `run_step`, so the
+  run was `aborted` instead of the step failing. Gemini (job
+  `e30a3227-3737-4e7a-8818-44c6f1107c8f`, 3 minutes) added the guard
+  (`tree read failed (...); heal skipped`, no heal trees) and
+  `test_tree_not_ok_fails_step` with a `FailingTreeBackend`; 121 tests OK.
+  `heal()` itself still raises, as the spec says.
+
 ## Open for Bobby
 
 - The density trick moves the button; a real fixture variant would be a
