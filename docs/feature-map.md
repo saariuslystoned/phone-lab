@@ -47,7 +47,8 @@ device proof yet or the proof missed its target), `planned`.
 
 | Feature | Modules / endpoints | Automated tests | Device proof | Status |
 |---|---|---|---|---|
-| Repair a missing ref from the nearest candidate within a bound, fail loudly otherwise | `phonelab/heal.py`, `phonelab/replay.py` | candidate search tests | one healed replay and one loud failure with both captures | planned |
+| Repair a missing ref from the nearest candidate within a bound (same class and label = moved; same label, other class = class_changed; ties within 10 px are ambiguous), with a `healed` note for the trail | `phonelab/heal.py` (`heal`, `HealResult`, `HealResult.to_json`); contract for replay in `plans/slice-5-self-heal.md` (`--max-heal-px`, `result.detail.heal`, `trees.heal`; hook is `replay.Runner.run_step`) | `tests/test_heal.py` (`HealTests`: `test_unchanged_tree_needs_no_heal`, `test_moved_60px_heals`, `test_class_changed_heals`, `test_inclusive_bound`, `test_custom_bound`) | one healed replay on the Fold after slice 3 lands | implemented (core), device proof after slice 3 |
+| Anything outside the bound fails loudly with both trees attached (`no_candidate`, `out_of_bound`, `ambiguous`) | `phonelab/heal.py` (`heal` failed notes, `HealResult.evidence`) | `tests/test_heal.py` (`test_out_of_bound_fails`, `test_deleted_node_no_candidate`, `test_ambiguous_fails`, `test_trees_unchanged`) | one loud failure with both captures after slice 3 lands | implemented (core), device proof after slice 3 |
 
 ## How to read this
 
