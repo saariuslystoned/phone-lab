@@ -75,7 +75,11 @@ that reviewers can see where new code should land.
   on flat content when ADR 001 was written, but 3–4 s on the wallpaper home
   screen (a 4 MB PNG; raw and gzip transports measured 1.9–3.3 s over a
   12 MB/s adb link). The viewer shows the measured rate per panel instead
-  of pretending otherwise.
+  of pretending otherwise. Opt-in alternative measured on the Pixel 10 Pro
+  XL (`docs/spike-display0-streaming.md`): `serve --stream-human` streams
+  logical display 0 with `screenrecord` h264 through ffmpeg at up to
+  `--stream-max-fps` (default 5), ≈ 0.35 s latency, frames downscaled to
+  `--max-height`; needs ffmpeg on PATH; proven beside a Cua session on the Fold (posture change untested; first frame after idle ≈ 5 s; streamed freezes report the decoded size).
 - **No session list in Cua.** phone-lab only knows sessions that were
   created through it (the on-disk registry). Any other Cua display shows
   "session unknown to phone-lab".

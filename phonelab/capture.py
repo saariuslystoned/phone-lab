@@ -19,6 +19,61 @@ JPEG_QUALITY = 80
 ERROR_BACKOFF_S = 1.0
 
 
+class CaptureError(Exception):
+    """Failure to capture or decode a frame."""
+
+
+class FrameSource:
+    """Tiny protocol/base for per-display frame sources."""
+
+    label: str = "unknown"
+
+    def next_frame(self) -> tuple[bytes, bytes, int, int] | None:
+        """Return (png, jpeg, width, height) for a new frame, None when no new frame yet.
+
+        Raises CaptureError on failure.
+        """
+        raise NotImplementedError
+
+    def stop(self) -> None:
+        """Stop any background resources. No-op by default."""
+
+
+class ScreencapSource(FrameSource):
+    """Wraps adb screencap for a single display."""
+
+    label: str = "screencap"
+
+    def __init__(self, adb: Adb, display: Display | Callable[[], Display],
+                 max_height: int = 1000, on_failure: Callable[[], None] | None = None) -> None:
+        self.adb = adb
+        self._display = display
+        self.max_height = max_height
+        self.on_failure = on_failure
+
+    def _get_display(self) -> Display:
+        return self._display() if callable(self._display) else self._display
+
+    def next_frame(self) -> tuple[bytes, bytes, int, int] | None:
+        display = self._get_display()
+        try:
+            png = self.adb.screencap(display.sf_id)
+        except AdbError as exc:
+            raise CaptureError(str(exc)) from exc
+        if png is None:
+            if self.on_failure is not None:
+                self.on_failure()
+            raise CaptureError("screencap returned no PNG")
+        try:
+            jpeg, width, height = _decode(png, self.max_height)
+        except Exception as exc:
+            raise CaptureError(f"decode failed: {exc}") from exc
+        return png, jpeg, width, height
+
+    def stop(self) -> None:
+        pass
+
+
 @dataclass
 class Frame:
     """The latest capture of one display: full-resolution PNG plus a downscaled JPEG preview."""
@@ -49,13 +104,17 @@ class DisplayCapture(threading.Thread):
     """One capture loop per display. Skips OFF displays; records the last error."""
 
     def __init__(self, adb: Adb, display: Display, max_height: int = 1000, interval: float = 0.0,
-                 on_failure: Callable[[], None] | None = None) -> None:
+                 on_failure: Callable[[], None] | None = None,
+                 source: FrameSource | None = None) -> None:
         super().__init__(name=f"capture-{display.unique_id}", daemon=True)
         self.adb = adb
         self.display = display
         self.max_height = max_height
         self.interval = interval
         self.on_failure = on_failure
+        self.source = source if source is not None else ScreencapSource(
+            self.adb, lambda: self.display, self.max_height, self.on_failure
+        )
         self.frame: Frame | None = None
         self.error: str | None = None
         self.fps = 0.0
@@ -67,6 +126,7 @@ class DisplayCapture(threading.Thread):
 
     def stop(self) -> None:
         self._halt.set()
+        self.source.stop()
 
     def _fail(self, message: str) -> None:
         self.error = self.adb.redact(message)
@@ -81,22 +141,14 @@ class DisplayCapture(threading.Thread):
                 continue
             started = time.time()
             try:
-                png = self.adb.screencap(self.display.sf_id)
-            except AdbError as exc:
+                frame_data = self.source.next_frame()
+            except CaptureError as exc:
                 self._fail(str(exc))
                 continue
-            if png is None:
-                # A Cua snapshot replaces the virtual display's surface and SurfaceFlinger hands out a new
-                # display id; ask the manager to re-inventory now instead of waiting for the next tick.
-                if self.on_failure is not None:
-                    self.on_failure()
-                self._fail("screencap returned no PNG")
+            if frame_data is None:
+                self._halt.wait(0.05)
                 continue
-            try:
-                jpeg, width, height = _decode(png, self.max_height)
-            except Exception as exc:  # Pillow raises several unrelated types on a truncated PNG
-                self._fail(f"decode failed: {exc}")
-                continue
+            png, jpeg, width, height = frame_data
             self._seq += 1
             self._times.append(started)
             if len(self._times) >= 2:
@@ -115,11 +167,13 @@ class DisplayCapture(threading.Thread):
 class CaptureManager:
     """Owns one DisplayCapture per non-ignored display and re-discovers displays periodically."""
 
-    def __init__(self, adb: Adb, registry: Registry, rediscover_every: float = 2.0, max_height: int = 1000) -> None:
+    def __init__(self, adb: Adb, registry: Registry, rediscover_every: float = 2.0, max_height: int = 1000,
+                 source_factory: Callable[[Display], FrameSource | None] | None = None) -> None:
         self.adb = adb
         self.registry = registry
         self.rediscover_every = rediscover_every
         self.max_height = max_height
+        self.source_factory = source_factory
         self.inventory_error: str | None = None
         self.inventories = 0
         self._threads: dict[str, DisplayCapture] = {}  # keyed by unique_id: SurfaceFlinger ids change under Cua
@@ -172,7 +226,8 @@ class CaptureManager:
             for display in wanted:
                 thread = self._threads.get(display.unique_id)
                 if thread is None:
-                    thread = DisplayCapture(self.adb, display, self.max_height, on_failure=self.wake)
+                    source = self.source_factory(display) if self.source_factory else None
+                    thread = DisplayCapture(self.adb, display, self.max_height, on_failure=self.wake, source=source)
                     self._threads[display.unique_id] = thread
                     thread.start()
                 else:
@@ -226,6 +281,7 @@ class CaptureManager:
                 "captures": thread.captures if thread else 0,
                 "errors": thread.errors if thread else 0,
                 "session": None,
+                "source": thread.source.label if thread else None,
             }
             if display.role == "agent":
                 match = sessions.get(display.logical_id) if display.logical_id is not None else None

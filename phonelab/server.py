@@ -7,6 +7,7 @@ import hashlib
 import io
 import json
 import re
+import shutil
 import sys
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -490,8 +491,14 @@ class ViewerHandler(ResponseMixin, BaseHTTPRequestHandler):
 
 def serve(adb: Adb, registry: Registry, host: str = "127.0.0.1", port: int = 8791,
           runs_dir: Path = Path("runs/phone-lab-runs"), max_height: int = 1000,
-          driver: Path | None = None, treedump_jar: Path | None = None) -> int:
+          driver: Path | None = None, treedump_jar: Path | None = None,
+          stream_human: bool = False, stream_bitrate: int = 4_000_000,
+          stream_max_fps: float = 5.0) -> int:
     """Run the viewer until Ctrl-C; capture threads start immediately."""
+    if stream_human and shutil.which("ffmpeg") is None:
+        print("error: --stream-human needs ffmpeg on PATH", file=sys.stderr)
+        return 2
+
     runs_dir = Path(runs_dir)
     try:
         server = bind_viewer(host, port, adb=adb, runs_dir=runs_dir)
@@ -506,7 +513,16 @@ def serve(adb: Adb, registry: Registry, host: str = "127.0.0.1", port: int = 879
         device = {"model": adb.model, "device_tag": device_tag, **adb.props()}
         server.device = device
 
-        manager = CaptureManager(adb, registry, max_height=max_height)
+        source_factory = None
+        if stream_human:
+            from .stream import H264StreamSource
+
+            def source_factory(d: Display) -> H264StreamSource | None:
+                if d.role == "human" and d.logical_id == 0 and d.state == "ON":
+                    return H264StreamSource(adb, d, max_height, stream_bitrate, stream_max_fps)
+                return None
+
+        manager = CaptureManager(adb, registry, max_height=max_height, source_factory=source_factory)
         server.manager = manager
         manager.start()
 
