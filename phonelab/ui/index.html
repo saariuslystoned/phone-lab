@@ -23,9 +23,19 @@
   .head .name { font-weight: 600; }
   .badge { font-size: 11px; padding: 2px 7px; border-radius: 10px; background: #3a3a48; color: #ddd; text-transform: uppercase; letter-spacing: .04em; }
   .badge.agent { background: #1f3d6b; color: #bcd8ff; }
+  .refs-btn { padding: 2px 8px; font-size: 11px; margin-left: auto; }
+  .refs-btn.active { background: #1f3d6b; color: #bcd8ff; border-color: #5aa0ff; }
+  .all-label { font-size: 11px; color: var(--muted); display: inline-flex; align-items: center; gap: 4px; cursor: pointer; user-select: none; }
+  .media-wrap { position: relative; display: inline-block; max-width: 100%; }
   .panel img { display: block; max-height: 72vh; max-width: 100%; width: auto; height: auto; background: #000; border-radius: 4px; }
+  .ref-overlay { position: absolute; top: 0; left: 0; pointer-events: none; overflow: hidden; }
+  .ref-box { position: absolute; border: 1px solid rgba(90, 160, 255, 0.75); background: rgba(90, 160, 255, 0.08); box-sizing: border-box; pointer-events: none; }
+  .ref-chip { position: absolute; top: 0; left: 0; background: #1f3d6b; color: #bcd8ff; font-size: 10px; font-family: ui-monospace, Menlo, monospace; padding: 1px 3px; border-bottom-right-radius: 3px; white-space: nowrap; line-height: 1.1; pointer-events: none; z-index: 1; }
+  .panel.agent .ref-chip { cursor: pointer; pointer-events: auto; }
+  .panel.agent .ref-chip:hover { background: #356ebd; color: #ffffff; }
   .placeholder { width: 260px; height: 480px; display: flex; align-items: center; justify-content: center; background: #26262e; color: var(--muted); border-radius: 4px; }
-  .foot, .session { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .foot, .tree-line, .session { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .tree-line.error { color: var(--red); }
   .session { color: #bcd8ff; }
   .session .low { color: var(--red); font-weight: 600; }
   .error { color: var(--red); font-size: 12px; }
@@ -52,24 +62,202 @@
 
   const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
 
+  async function onTap(logicalId, ref) {
+    toast.textContent = `tap ${ref}…`;
+    try {
+      const r = await fetch('/api/tap', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ logical_id: logicalId, ref: ref }),
+      });
+      const j = await r.json();
+      if (r.ok && j.ok) {
+        toast.textContent = `tap ${j.ref} → ok (${j.x},${j.y}) ${j.cost_ms} ms`;
+      } else {
+        toast.textContent = `tap ${ref} → ${j.reason || j.error || r.status}`;
+      }
+    } catch (e) {
+      toast.textContent = `tap ${ref} → ${e.message || e}`;
+    }
+  }
+
+  function renderOverlay(p) {
+    p.overlay.replaceChildren();
+    if (!p.refsActive || !p.tree || p.displayState === 'OFF' || p.showing !== p.img) {
+      return;
+    }
+    const cw = p.img.clientWidth;
+    const ch = p.img.clientHeight;
+    if (!cw || !ch || !p.dispWidth || !p.dispHeight) {
+      return;
+    }
+    p.overlay.style.width = cw + 'px';
+    p.overlay.style.height = ch + 'px';
+    const scaleX = cw / p.dispWidth;
+    const scaleY = ch / p.dispHeight;
+    const all = p.allInput.checked;
+    const isAgent = p.role === 'agent';
+
+    for (const node of p.tree.nodes || []) {
+      if (!node.ref) continue;
+      if (!all && !node.clickable && !node.editable && !node.checkable) continue;
+      const b = node.bounds;
+      if (!b || b.length < 4) continue;
+      const box = el('div', 'ref-box');
+      box.style.left = Math.round(b[0] * scaleX) + 'px';
+      box.style.top = Math.round(b[1] * scaleY) + 'px';
+      box.style.width = Math.max(1, Math.round((b[2] - b[0]) * scaleX)) + 'px';
+      box.style.height = Math.max(1, Math.round((b[3] - b[1]) * scaleY)) + 'px';
+      const chip = el('div', 'ref-chip', node.ref);
+      if (isAgent) {
+        chip.addEventListener('click', (ev) => {
+          ev.stopPropagation();
+          onTap(p.logicalId, node.ref);
+        });
+      }
+      box.append(chip);
+      p.overlay.append(box);
+    }
+  }
+
+  function updateTreeLine(p) {
+    if (!p.refsActive) {
+      p.treeLine.hidden = true;
+      return;
+    }
+    p.treeLine.hidden = false;
+    if (p.treeError) {
+      p.treeLine.className = 'tree-line error';
+      p.treeLine.textContent = `tree: ${p.treeError}`;
+      return;
+    }
+    p.treeLine.className = 'tree-line';
+    if (!p.tree) {
+      p.treeLine.textContent = 'tree: waiting for data…';
+      return;
+    }
+    const nodesCount = (p.tree.nodes || []).length;
+    const refsCount = p.tree.refs ? (p.tree.refs.count ?? Object.keys(p.tree.refs.refs || {}).length) : 0;
+    const cost = p.treeCostMs ?? 0;
+    const now = Date.now();
+    const age = p.treeFetchedAt ? Math.max(0, (now - p.treeFetchedAt) / 1000).toFixed(1) + ' s' : '–';
+    p.treeLine.textContent = `tree: ${nodesCount} nodes · ${refsCount} refs · ${cost} ms · age ${age}`;
+  }
+
+  async function fetchTree(p) {
+    if (!p.refsActive || p.displayState === 'OFF' || p.logicalId == null) {
+      return;
+    }
+    try {
+      const r = await fetch(`/api/tree/${p.logicalId}`, { cache: 'no-store' });
+      if (!r.ok) {
+        let errText = `HTTP ${r.status}`;
+        try {
+          const j = await r.json();
+          if (j.error) errText = j.error;
+          else if (j.reason) errText = j.reason;
+        } catch (_) {}
+        p.treeError = errText;
+        p.tree = null;
+        p.overlay.replaceChildren();
+        updateTreeLine(p);
+        return;
+      }
+      const tree = await r.json();
+      p.tree = tree;
+      p.treeError = null;
+      p.treeFetchedAt = Date.now();
+      p.treeCostMs = tree.cost_ms ?? 0;
+      renderOverlay(p);
+      updateTreeLine(p);
+    } catch (e) {
+      p.treeError = e.message || String(e);
+      p.tree = null;
+      p.overlay.replaceChildren();
+      updateTreeLine(p);
+    }
+  }
+
+  function startTreePolling(p) {
+    if (p.treeInterval) return;
+    fetchTree(p);
+    p.treeInterval = setInterval(() => {
+      if (p.refsActive && p.displayState !== 'OFF' && p.logicalId != null) {
+        fetchTree(p);
+      }
+    }, 1000);
+  }
+
+  function stopTreePolling(p) {
+    if (p.treeInterval) {
+      clearInterval(p.treeInterval);
+      p.treeInterval = null;
+    }
+    p.overlay.replaceChildren();
+  }
+
   function createPanel(d) {
     const root = el('div', 'panel');
     const head = el('div', 'head');
     const name = el('span', 'name'); const logical = el('span', 'muted'); const badge = el('span', 'badge');
-    head.append(name, logical, badge);
-    const media = el('div');
+    const refsBtn = el('button', 'refs-btn', 'refs');
+    const allLabel = el('label', 'all-label'); allLabel.hidden = true;
+    const allInput = document.createElement('input'); allInput.type = 'checkbox';
+    allLabel.append(allInput, document.createTextNode(' all'));
+    head.append(name, logical, badge, refsBtn, allLabel);
+
+    const media = el('div', 'media-wrap');
     const img = el('img'); img.alt = ''; img.loading = 'eager';
+    const overlay = el('div', 'ref-overlay');
     const placeholder = el('div', 'placeholder', 'display off');
     const foot = el('div', 'foot');
+    const treeLine = el('div', 'tree-line'); treeLine.hidden = true;
     const session = el('div', 'session'); session.hidden = true;
     const error = el('div', 'error'); error.hidden = true;
-    root.append(head, media, foot, session, error);
-    return { root, name, logical, badge, media, img, placeholder, foot, session, error,
-             seq: null, capturedAt: null, fps: 0, size: '', leaseMs: null, leaseAt: 0, lastAction: null, showing: null, sessionKey: null };
+    root.append(head, media, foot, treeLine, session, error);
+
+    const p = {
+      root, name, logical, badge, refsBtn, allLabel, allInput, media, img, overlay, placeholder, foot, treeLine, session, error,
+      seq: null, capturedAt: null, fps: 0, size: '', leaseMs: null, leaseAt: 0, lastAction: null, showing: null, sessionKey: null,
+      refsActive: false, treeInterval: null, tree: null, treeFetchedAt: null, treeCostMs: 0, treeError: null,
+      displayState: d.state, logicalId: d.logical_id, role: d.role, dispWidth: d.width, dispHeight: d.height,
+    };
+
+    refsBtn.addEventListener('click', () => {
+      p.refsActive = !p.refsActive;
+      refsBtn.classList.toggle('active', p.refsActive);
+      allLabel.hidden = !p.refsActive;
+      p.treeLine.hidden = !p.refsActive;
+      if (p.refsActive) {
+        startTreePolling(p);
+      } else {
+        stopTreePolling(p);
+        p.treeLine.textContent = '';
+      }
+    });
+
+    allInput.addEventListener('change', () => {
+      renderOverlay(p);
+    });
+
+    img.addEventListener('load', () => {
+      if (p.refsActive) {
+        renderOverlay(p);
+      }
+    });
+
+    return p;
   }
 
   function showMedia(p, node) {
-    if (p.showing !== node) { p.media.replaceChildren(node); p.showing = node; }
+    if (p.showing !== node) {
+      p.showing = node;
+      if (node === p.img) {
+        p.media.replaceChildren(p.img, p.overlay);
+      } else {
+        p.media.replaceChildren(node);
+      }
+    }
   }
 
   function render(state) {
@@ -83,6 +271,12 @@
       let p = panels.get(key);
       if (!p) { p = createPanel(disp); panels.set(key, p); }
       order.push(p.root);
+      p.displayState = disp.state;
+      p.logicalId = disp.logical_id;
+      p.role = disp.role;
+      p.dispWidth = disp.width;
+      p.dispHeight = disp.height;
+      p.root.className = `panel ${disp.role}`;
       p.name.textContent = disp.name;
       p.logical.textContent = `logical ${disp.logical_id == null ? '?' : disp.logical_id}`;
       p.badge.textContent = disp.role; p.badge.className = `badge ${disp.role}`;
@@ -90,6 +284,7 @@
       p.fps = disp.fps || 0; p.capturedAt = disp.captured_at;
       if (disp.state === 'OFF') {
         p.placeholder.textContent = 'display off'; showMedia(p, p.placeholder);
+        p.overlay.replaceChildren();
       } else if (disp.seq == null) {
         p.placeholder.textContent = disp.error || 'waiting for first frame'; showMedia(p, p.placeholder);
       } else {
@@ -118,7 +313,13 @@
         }
       } else { p.session.hidden = true; p.sessionKey = null; }
     }
-    for (const [id, p] of panels) if (!seen.has(id)) { p.root.remove(); panels.delete(id); }
+    for (const [id, p] of panels) {
+      if (!seen.has(id)) {
+        stopTreePolling(p);
+        p.root.remove();
+        panels.delete(id);
+      }
+    }
     if (order.length) main.replaceChildren(...order); else main.replaceChildren(el('div', 'empty', 'no displays reported'));
     tick();
   }
@@ -137,6 +338,12 @@
         if (la) {
           const a = p.lastAction;
           la.textContent = a ? `${a.kind} ${a.result}${a.at ? ' · ' + Math.max(0, now - a.at).toFixed(0) + ' s ago' : ''}` : '–';
+        }
+      }
+      if (p.refsActive) {
+        updateTreeLine(p);
+        if (p.tree && p.showing === p.img && p.overlay.style.width !== p.img.clientWidth + 'px') {
+          renderOverlay(p);
         }
       }
     }

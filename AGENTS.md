@@ -16,9 +16,13 @@ phone-lab is a public MIT repo. These rules apply to every agent and worker.
   or `ANDROID_SERIAL`, naming models only.
 - Each instance writes under `runs/phone-lab-runs/<device-tag>/` (tag from
   the model name, never the serial); use `--port 0` when 8791 may be taken.
-- Inner panel is logical display 0; the cover panel is logical display 3.
-  SurfaceFlinger ids (for `screencap -d`) and logical ids (for `input -d`,
-  Cua `display_id`) are different namespaces; join them on `uniqueId`.
+- Logical display 0 is whichever panel is active: the inner panel when the
+  phone is open (cover panel OFF as logical 3, observed all night
+  2026-09-26/27), the cover panel when it is closed (inner panel OFF as
+  logical 1, observed 2026-09-27). Re-run `python3 -m phonelab inventory`
+  after any posture change. SurfaceFlinger ids (for `screencap -d`) and
+  logical ids (for `input -d`, Cua `display_id`) are different namespaces;
+  join them on `uniqueId`.
 - Drive only Cua's synthetic apps (`ai.cua.fixture.notes`,
   `ai.cua.android.demo`) unless Bobby approves another app explicitly.
 - Never change security settings, bypass Play Protect, or dismiss a PIN

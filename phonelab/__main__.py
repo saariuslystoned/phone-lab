@@ -1,4 +1,4 @@
-"""CLI: `python3 -m phonelab inventory | serve | cua demo | trace`."""
+"""CLI: `python3 -m phonelab inventory | serve | cua demo | tree | trace`."""
 from __future__ import annotations
 
 import argparse
@@ -15,6 +15,18 @@ from .sessions import Registry
 DEFAULT_RUNS_DIR = "runs/phone-lab-runs"
 
 
+def _resolve_treedump_jar(cli_val: str | None) -> Path | None:
+    if cli_val:
+        return Path(cli_val)
+    env_val = os.environ.get("PHONELAB_TREEDUMP_JAR")
+    if env_val:
+        return Path(env_val)
+    repo_jar = Path(__file__).resolve().parent.parent / "tools" / "treedump" / "build" / "treedump.jar"
+    if repo_jar.is_file():
+        return repo_jar
+    return None
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="phonelab", description="phone-lab: watch and drive Android displays.")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -26,12 +38,19 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("inventory", help="print every display as JSON", parents=[device])
 
+    tree = sub.add_parser("tree", help="dump element tree with refs as JSON", parents=[device])
+    tree.add_argument("logical_id", type=int, help="logical display id")
+    tree.add_argument("--treedump-jar", help="path to treedump.jar (or set PHONELAB_TREEDUMP_JAR)")
+
     srv = sub.add_parser("serve", help="run the live multi-display viewer", parents=[device])
     srv.add_argument("--host", default="127.0.0.1")
     srv.add_argument("--port", type=int, default=8791, help="0 picks a free port and prints it")
     srv.add_argument("--runs-dir", default=DEFAULT_RUNS_DIR)
     srv.add_argument("--device-tag", help="override the device tag (derived from model by default)")
     srv.add_argument("--max-height", type=int, default=1000, help="preview JPEG height cap")
+    srv.add_argument("--driver", default=os.environ.get("PHONELAB_CUA_DRIVER"),
+                     help="path to the cua-driver binary (or set PHONELAB_CUA_DRIVER)")
+    srv.add_argument("--treedump-jar", help="path to treedump.jar (or set PHONELAB_TREEDUMP_JAR)")
 
     trc = sub.add_parser("trace", help="browse recorded runs and diffs")
     trc.add_argument("--host", default="127.0.0.1")
@@ -75,9 +94,37 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "inventory":
         print(json.dumps([to_json(d) for d in inventory(adb)], indent=2))
         return 0
+    if args.command == "tree":
+        jar = _resolve_treedump_jar(args.treedump_jar)
+        if not jar:
+            print("error: --treedump-jar (or PHONELAB_TREEDUMP_JAR) is required", file=sys.stderr)
+            return 2
+        from .tree import TreeDumper, TreeError
+        from .refs import assign_refs
+        dumper = TreeDumper(adb, jar)
+        try:
+            dumper.start()
+            reply = dumper.tree(args.logical_id)
+            if reply.get("ok"):
+                assign_refs(reply)
+            print(json.dumps(reply, indent=2))
+            return 0 if reply.get("ok") else 1
+        except TreeError as exc:
+            print(f"error: {adb.redact(str(exc))}", file=sys.stderr)
+            return 1
+        finally:
+            dumper.stop()
     if args.command == "serve":
         from .server import serve
-        return serve(adb, registry, args.host, args.port, device_dir, args.max_height)
+
+        def _terminate(signum, frame):  # `kill <pid>` must stop the device-side treedump process too
+            raise KeyboardInterrupt
+
+        signal.signal(signal.SIGTERM, _terminate)
+        jar = _resolve_treedump_jar(args.treedump_jar)
+        driver = Path(args.driver) if args.driver else None
+        return serve(adb, registry, args.host, args.port, device_dir, args.max_height,
+                     driver=driver, treedump_jar=jar)
     if args.command == "cua":
         from .cua import CuaDriver, demo as run_demo
 

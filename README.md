@@ -24,6 +24,14 @@ freeze-frame button that writes a labelled composite plus a JSON manifest.
 Display 0 runs well under 1 fps on busy screens; see the known limits in
 [docs/feature-map.md](docs/feature-map.md).
 
+Slice 2 (cross-display element refs) is proven on the same phone: a small
+Java program under `app_process` reads the accessibility tree of any
+display, `GET /api/tree/<logical_id>` serves it with short content-stable
+refs, the viewer overlays the refs, and `POST /api/tap` taps a ref on a Cua
+display through cua-driver. The fixture's increment ref stayed identical
+across ten captures and a toast, and ten tap-by-ref calls landed while a
+synthetic human typed on display 0 (`proof/slice-2-element-refs/PROOF.md`).
+
 Run it (Python 3.12 plus Pillow, one authorized device on USB):
 
 ```bash
@@ -32,6 +40,9 @@ python3 -m phonelab inventory
 python3 -m phonelab serve                      # http://127.0.0.1:8791/
 python3 -m phonelab serve --port 0             # a free port; the URL is printed
 python3 -m phonelab cua demo --driver /path/to/cua-driver --duration 300 --tap-every 8
+sh tools/treedump/build.sh                      # needs the Android SDK (javac, d8)
+python3 -m phonelab tree 0                      # element tree of logical display 0, with refs
+python3 -m phonelab serve --driver /path/to/cua-driver   # adds /api/tree, /api/tap and the refs overlay
 ```
 
 Other agents' emulators, phones, and phone-lab instances can share the

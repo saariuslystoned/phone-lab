@@ -26,16 +26,19 @@ Stack: see [ADR 001](../docs/adr-001-tech-stack.md).
 
 Spec: [slice-1-live-viewer.md](slice-1-live-viewer.md).
 
-## Slice 2 — Cross-display element refs
+## Slice 2 — Cross-display element refs (2026-09-27, proven on the Fold)
 
-- Read the accessibility tree of any display (shell-UID UiAutomation with
-  `getWindowsOnAllDisplays`, connected without suppressing the human's
-  services) and expose it as `GET /api/tree/<logical_id>`.
-- Assign short content-stable refs (class, label, centre rounded to a 10 px
-  grid, hashed) per display; show them as an overlay in the viewer.
-- Prove: ref for the fixture's increment button is identical across ten
-  captures and survives a toast; tap-by-ref lands on a Cua display while a
-  human types on display 0.
+- [x] Read the accessibility tree of any display (shell-UID UiAutomation with
+      `getWindowsOnAllDisplays`, connected without suppressing the human's
+      services) and expose it as `GET /api/tree/<logical_id>`. Text and
+      window titles are redacted outside the Cua apps.
+- [x] Assign short content-stable refs (class, label, centre rounded to a 10 px
+      grid, hashed) per display; show them as an overlay in the viewer.
+- [x] Prove: ref for the fixture's increment button is identical across ten
+      captures and survives a toast; tap-by-ref lands on a Cua display while a
+      human types on display 0. See `proof/slice-2-element-refs/PROOF.md`.
+
+Spec: [slice-2-element-refs.md](slice-2-element-refs.md).
 
 ## Slice 3 — Trails: record and replay
 
