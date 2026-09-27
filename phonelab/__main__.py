@@ -81,6 +81,8 @@ def build_parser() -> argparse.ArgumentParser:
     rec.add_argument("--device-tag", help="override the device tag (derived from model by default)")
     rec.add_argument("--trails-dir", help="override trails destination directory")
     rec.add_argument("--agent-only", action="store_true", help="skip human display capture")
+    rec.add_argument("--cua-size", help="Cua display WIDTHxHEIGHT (driver default 1080x1920)")
+    rec.add_argument("--cua-density", type=int, help="Cua display density dpi (driver default 320)")
 
     rep = trail_sub.add_parser("replay", help="replay a trail", parents=[device])
     rep.add_argument("trail", help="path to trail.json")
@@ -93,6 +95,14 @@ def build_parser() -> argparse.ArgumentParser:
     rep.add_argument("--runs-dir", default=DEFAULT_RUNS_DIR)
     rep.add_argument("--device-tag", help="override the device tag (derived from model by default)")
     rep.add_argument("--agent-only", action="store_true", help="skip human display capture")
+    rep.add_argument("--cua-size", help="Cua display WIDTHxHEIGHT (driver default 1080x1920)")
+    rep.add_argument("--cua-density", type=int, help="Cua display density dpi (driver default 320)")
+    rep.add_argument(
+        "--max-heal-px",
+        type=int,
+        default=120,
+        help="self-heal a missing ref within this many px (0 = only in place)",
+    )
 
     return parser
 
@@ -198,6 +208,8 @@ def main(argv: list[str] | None = None) -> int:
                     args.name,
                     script_text,
                     capture_human=not args.agent_only,
+                    cua_size=args.cua_size,
+                    cua_density=args.cua_density,
                 )
             if args.trail_command == "replay":
                 return replay(
@@ -209,6 +221,9 @@ def main(argv: list[str] | None = None) -> int:
                     source_run_id=args.source_run_id,
                     capture_human=not args.agent_only,
                     stop_on_fail=not args.continue_on_fail,
+                    max_heal_px=args.max_heal_px,
+                    cua_size=args.cua_size,
+                    cua_density=args.cua_density,
                 )
         except Exception as exc:
             print(f"error: {adb.redact(str(exc))}", file=sys.stderr)

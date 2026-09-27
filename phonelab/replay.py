@@ -16,6 +16,7 @@ from PIL import Image
 from phonelab.adb import Adb
 from phonelab.cua import CuaDriver, CuaError, MAX_STALE_RETRIES, STALE_REASONS, fixture_state
 from phonelab.displays import Display, inventory, to_json
+from phonelab.heal import heal
 from phonelab.refs import assign_refs, find, label_of, tap_point
 from phonelab.sessions import Registry, SessionRecord
 from phonelab.trace import RUN_SCHEMA, STEP_SCHEMA, TREE_SCHEMA
@@ -29,6 +30,21 @@ from phonelab.trails import (
     load_trail,
     parse_script,
     save_trail,
+)
+
+RECORDED_NODE_KEYS = (
+    "i",
+    "class",
+    "text",
+    "desc",
+    "id",
+    "bounds",
+    "clickable",
+    "long_clickable",
+    "editable",
+    "checkable",
+    "focusable",
+    "visible",
 )
 
 
@@ -342,6 +358,7 @@ class RunWriter:
         displays: list[Display],
         session: dict | None,
         command: str,
+        heal: dict | None = None,
     ) -> None:
         self.runs_dir = Path(runs_dir)
         self.run_id = run_id
@@ -354,6 +371,7 @@ class RunWriter:
         self.displays = displays
         self.session = session
         self.command = command
+        self.heal = heal
         self.run_dir = self.runs_dir / self.run_id
         self.steps_summary: list[dict] = []
         self.started_at = time.time()
@@ -389,6 +407,7 @@ class RunWriter:
             },
             "displays": [to_json(d) for d in self.displays],
             "session": self.session,
+            "heal": self.heal,
             "steps": self.steps_summary,
             "result": None,
             "timings": {
@@ -492,6 +511,7 @@ class RunWriter:
             },
             "displays": [to_json(d) for d in self.displays],
             "session": self.session,
+            "heal": self.heal,
             "steps": self.steps_summary,
             "result": result_doc,
             "timings": timings_doc,
@@ -515,6 +535,9 @@ class Runner:
         capture_human: bool = True,
         poll_ms: int = 400,
         log: Callable[[str], None] = print,
+        max_heal_px: int = 120,
+        cua_size: str | None = None,
+        cua_density: int | None = None,
     ) -> None:
         self.backend = backend
         self.registry = registry
@@ -522,13 +545,16 @@ class Runner:
         self.capture_human = capture_human
         self.poll_ms = poll_ms
         self.log = log
+        self.max_heal_px = max_heal_px
+        self.cua_size = cua_size
+        self.cua_density = cua_density
         self.session_record: SessionRecord | None = None
         self.display_id: int | None = None
         self.target_id: str | None = None
         self.seq_tracker: dict[int, int] = defaultdict(int)
 
     def open_session(self, allow_apps: list[str], label: str) -> SessionRecord:
-        created = self.backend.driver.create(allow_apps, label)
+        created = self.backend.driver.create(allow_apps, label, size=self.cua_size, density=self.cua_density)
         now = time.time()
         sid = created["data"]["session_id"]
         disp_id = created["data"].get("display_id")
@@ -680,15 +706,42 @@ class Runner:
         frame_stale_retries = 0
         tap_x = tap_y = None
         node_index = None
+        trees_heal: dict[str, str] | None = None
 
         if kind in ("tap", "set_text"):
             ref = step.action.get("ref", "")
             node = find(tree_before, ref)
             if node is None:
-                status = "fail"
+                recorded_spec = step.action.get("recorded")
                 ref_count = len([n for n in tree_before.get("nodes", []) if n.get("ref")])
-                message = f"ref {ref} not found in tree ({ref_count} refs)"
+                if not recorded_spec:
+                    status = "fail"
+                    message = f"ref {ref} not found in tree ({ref_count} refs); trail has no recorded node, re-record to enable healing"
+                else:
+                    recorded_node = dict(recorded_spec)
+                    recorded_node["ref"] = ref
+                    recorded_tree = {"nodes": [recorded_node], "refs": {"count": 1, "refs": {ref: 0}}}
+                    res = heal(ref, recorded_tree, tree_before, max_distance_px=self.max_heal_px)
+                    recorded_file = writer.write_tree(index, "recorded", display_id, recorded_tree)
+                    current_file = writer.write_tree(index, "current", display_id, tree_before)
+                    trees_heal = {"recorded": recorded_file, "current": current_file}
+                    result_detail["heal"] = res.to_json()
+                    note = res.note
+                    if res.status == "healed":
+                        node = res.node
+                        status = "healed"
+                        message = f"ref {ref} healed: {note['reason']} {note['distance_px']} px"
+                        action_detail["ref_used"] = res.ref
+                        if kind == "tap":
+                            tap_x, tap_y = tap_point(node)
+                        elif kind == "set_text":
+                            node_index = node.get("i", 0)
+                    else:
+                        status = "fail"
+                        message = f"ref {ref} missing: {note['reason']} ({note['message']}); trees {recorded_file} and {current_file}"
             else:
+                if derive:
+                    step.action["recorded"] = {k: node[k] for k in RECORDED_NODE_KEYS if k in node}
                 if kind == "tap":
                     tap_x, tap_y = tap_point(node)
                     hint = {
@@ -706,13 +759,13 @@ class Runner:
 
         # 4b. Record mode: read the oracle before a tap so the derived predicate waits for a change
         counter_before = None
-        if derive and kind == "tap" and status == "ok" and step.predicate is None:
+        if derive and kind == "tap" and status in ("ok", "healed") and step.predicate is None:
             st0 = self.backend.fixture_state()
             counter_before = st0.get("counter") if st0 else None
 
         # 5. Action
         t_act0 = time.time()
-        if status == "ok":
+        if status in ("ok", "healed"):
             try:
                 if kind == "launch":
                     pkg = step.action["package"]
@@ -724,7 +777,7 @@ class Runner:
                     if self.session_record:
                         self.session_record.package = pkg
                         self.session_record.target_id = self.target_id
-                    action_detail = {"package": pkg}
+                    action_detail.update({"package": pkg})
                 elif kind == "tap":
                     while True:
                         snap = self.backend.driver.snapshot(self.session_record.session_id, self.target_id)
@@ -737,12 +790,12 @@ class Runner:
                                 frame_stale_retries += 1
                                 continue
                             raise
-                    action_detail = {
+                    action_detail.update({
                         "x": tap_x,
                         "y": tap_y,
                         "snapshot_id": snap_id,
                         "package": self.session_record.package if self.session_record else None,
-                    }
+                    })
                 elif kind == "set_text":
                     self.backend.act(display_id, node_index, "focus")
                     if step.action.get("clear_first", True):
@@ -751,11 +804,11 @@ class Runner:
                     txt = step.action["text"]
                     escaped_txt = txt.replace(" ", "%s")
                     self.backend.shell("input", "-d", str(display_id), "text", escaped_txt)
-                    action_detail = {"text": txt, "clear_first": step.action.get("clear_first", True)}
+                    action_detail.update({"text": txt, "clear_first": step.action.get("clear_first", True)})
                 elif kind == "key":
                     keycode = step.action["keycode"]
                     self.backend.shell("input", "-d", str(display_id), "keyevent", keycode)
-                    action_detail = {"keycode": keycode}
+                    action_detail.update({"keycode": keycode})
                 elif kind == "swipe":
                     frm = step.action["from"]
                     to = step.action["to"]
@@ -764,13 +817,13 @@ class Runner:
                         "input", "-d", str(display_id), "swipe",
                         str(frm[0]), str(frm[1]), str(to[0]), str(to[1]), str(dur),
                     )
-                    action_detail = {"from": frm, "to": to, "duration_ms": dur}
+                    action_detail.update({"from": frm, "to": to, "duration_ms": dur})
                 elif kind == "sleep":
                     ms = step.action["ms"]
                     time.sleep(ms / 1000.0)
-                    action_detail = {"ms": ms}
+                    action_detail.update({"ms": ms})
                 elif kind == "wait_for":
-                    action_detail = {}
+                    pass
             except CuaError as exc:
                 status = "refused" if exc.status == "refused" else "error"
                 message = exc.reason
@@ -785,7 +838,7 @@ class Runner:
         # 6. Wait / Predicate
         t_wait0 = time.time()
         used_predicate = step.predicate
-        if status == "ok":
+        if status in ("ok", "healed"):
             if derive and step.predicate is None:
                 if kind == "launch":
                     pkg = step.action.get("package")
@@ -892,6 +945,10 @@ class Runner:
             "duration_ms": duration_ms,
             "phases": phases,
         }
+        trees_doc: dict[str, Any] = {"before": trees_before, "after": trees_after}
+        if trees_heal is not None:
+            trees_doc["heal"] = trees_heal
+
         step_doc = {
             "schema": STEP_SCHEMA,
             "index": index,
@@ -901,7 +958,7 @@ class Runner:
             "result": result_doc,
             "timings": timings_doc,
             "captures": {"before": captures_before, "after": captures_after},
-            "trees": {"before": trees_before, "after": trees_after},
+            "trees": trees_doc,
         }
         writer.write_step(step_doc)
 
@@ -972,6 +1029,8 @@ def record(
     script_text: str,
     *,
     capture_human: bool = True,
+    cua_size: str | None = None,
+    cua_density: int | None = None,
 ) -> int:
     runs_dir = Path(runs_dir)
     trails_dir = Path(trails_dir)
@@ -985,7 +1044,8 @@ def record(
             if pkg not in allow_apps:
                 allow_apps.append(pkg)
 
-    runner = Runner(backend, registry, runs_dir, capture_human=capture_human)
+    runner = Runner(backend, registry, runs_dir, capture_human=capture_human,
+                    cua_size=cua_size, cua_density=cua_density)
     writer: RunWriter | None = None
     try:
         backend.start()
@@ -1005,6 +1065,7 @@ def record(
             displays=backend.inventory(),
             session=session_rec.to_json(),
             command="record",
+            heal=None,
         )
         writer.begin()
 
@@ -1029,7 +1090,7 @@ def record(
             step.predicate = used_pred
             recorded_steps.append(step)
 
-            if step_doc["result"]["status"] != "ok":
+            if step_doc["result"]["status"] not in ("ok", "healed"):
                 run_status = "fail"
                 fail_message = step_doc["result"].get("message")
                 break
@@ -1072,12 +1133,23 @@ def replay(
     source_run_id: str | None = None,
     capture_human: bool = True,
     stop_on_fail: bool = True,
+    max_heal_px: int = 120,
+    cua_size: str | None = None,
+    cua_density: int | None = None,
 ) -> int:
     runs_dir = Path(runs_dir)
     trail_path = Path(trail_path)
     trail = load_trail(trail_path)
 
-    runner = Runner(backend, registry, runs_dir, capture_human=capture_human)
+    runner = Runner(
+        backend,
+        registry,
+        runs_dir,
+        capture_human=capture_human,
+        max_heal_px=max_heal_px,
+        cua_size=cua_size,
+        cua_density=cua_density,
+    )
     allow_apps = trail.session.get("allow_apps", ["ai.cua.fixture.notes"])
     label = trail.session.get("label", default_label(trail.name))
 
@@ -1106,6 +1178,7 @@ def replay(
                 displays=backend.inventory(),
                 session=session_rec.to_json(),
                 command="replay",
+                heal={"max_distance_px": max_heal_px},
             )
             writer.begin()
 
@@ -1128,7 +1201,7 @@ def replay(
                     derive=False,
                     total_steps=len(trail.steps),
                 )
-                if step_doc["result"]["status"] != "ok":
+                if step_doc["result"]["status"] not in ("ok", "healed"):
                     has_failed = True
                     iter_status = "fail"
                     iter_message = step_doc["result"].get("message")
