@@ -43,7 +43,7 @@
 <main id="panels"><div class="empty">waiting for /api/state…</div></main>
 <script>
 (() => {
-  const panels = new Map();          // sf_id -> panel record
+  const panels = new Map();          // unique_id (stable across Cua surface swaps) -> panel record
   let lastOk = 0;                    // Date.now() of the last successful poll
   let clockOffset = 0;               // client seconds minus server seconds
   const main = document.getElementById('panels');
@@ -78,9 +78,10 @@
     const seen = new Set();
     const order = [];
     for (const disp of state.displays || []) {
-      seen.add(disp.sf_id);
-      let p = panels.get(disp.sf_id);
-      if (!p) { p = createPanel(disp); panels.set(disp.sf_id, p); }
+      const key = disp.unique_id || disp.sf_id;
+      seen.add(key);
+      let p = panels.get(key);
+      if (!p) { p = createPanel(disp); panels.set(key, p); }
       order.push(p.root);
       p.name.textContent = disp.name;
       p.logical.textContent = `logical ${disp.logical_id == null ? '?' : disp.logical_id}`;
@@ -92,7 +93,7 @@
       } else if (disp.seq == null) {
         p.placeholder.textContent = disp.error || 'waiting for first frame'; showMedia(p, p.placeholder);
       } else {
-        if (disp.seq !== p.seq) { p.seq = disp.seq; p.img.src = `/frame/${disp.sf_id}.jpg?seq=${disp.seq}`; }
+        if (disp.seq !== p.seq) { p.seq = disp.seq; p.img.src = `/frame/${encodeURIComponent(key)}.jpg?seq=${disp.seq}`; }
         showMedia(p, p.img);
       }
       const err = disp.error && disp.state !== 'OFF' ? disp.error : '';

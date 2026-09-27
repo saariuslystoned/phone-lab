@@ -9,7 +9,7 @@ import re
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 from PIL import Image, ImageDraw, ImageFont
 
@@ -189,7 +189,7 @@ class ViewerHandler(BaseHTTPRequestHandler):
         elif path == "/api/freezes":
             self._json(recent_freezes(self.server.runs_dir))
         elif path.startswith("/frame/") and path.endswith(".jpg"):
-            frame = self.server.manager.frame(path[len("/frame/"):-len(".jpg")])
+            frame = self.server.manager.frame(unquote(path[len("/frame/"):-len(".jpg")]))
             if frame is None:
                 self._json({"error": "no frame yet"}, 404)
             else:
