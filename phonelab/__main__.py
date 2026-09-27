@@ -51,6 +51,11 @@ def build_parser() -> argparse.ArgumentParser:
     srv.add_argument("--driver", default=os.environ.get("PHONELAB_CUA_DRIVER"),
                      help="path to the cua-driver binary (or set PHONELAB_CUA_DRIVER)")
     srv.add_argument("--treedump-jar", help="path to treedump.jar (or set PHONELAB_TREEDUMP_JAR)")
+    srv.add_argument("--stream-human", action="store_true",
+                     help="stream the human display (logical 0) with screenrecord h264 instead of screencap; "
+                          "opt-in, needs ffmpeg on PATH")
+    srv.add_argument("--stream-bitrate", type=int, default=4_000_000, help="screenrecord --bit-rate")
+    srv.add_argument("--stream-max-fps", type=float, default=5.0, help="cap on delivered stream frames per second")
 
     trc = sub.add_parser("trace", help="browse recorded runs and diffs")
     trc.add_argument("--host", default="127.0.0.1")
@@ -161,7 +166,8 @@ def main(argv: list[str] | None = None) -> int:
         jar = _resolve_treedump_jar(args.treedump_jar)
         driver = Path(args.driver) if args.driver else None
         return serve(adb, registry, args.host, args.port, device_dir, args.max_height,
-                     driver=driver, treedump_jar=jar)
+                     driver=driver, treedump_jar=jar, stream_human=args.stream_human,
+                     stream_bitrate=args.stream_bitrate, stream_max_fps=args.stream_max_fps)
     if args.command == "cua":
         from .cua import CuaDriver, demo as run_demo
 

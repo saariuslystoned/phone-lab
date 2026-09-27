@@ -69,6 +69,16 @@ interpreter on PATH.
   `screenrecord`/H.264 stream), but slows the first four slices and there
   is no reusable Rust from today's evidence. Revisit only when 1–2 fps
   polling is measurably the bottleneck.
+- **`screenrecord` H.264 stream for the human panel** (measured
+  2026-09-27 on the Pixel 10 Pro XL, `docs/spike-display0-streaming.md`):
+  `screenrecord --output-format=h264 -` streamed over adb and decoded by
+  ffmpeg delivers every changed frame (≈ 60 fps encoded, 30–50 fps decoded
+  on the host) at 0.3 MB/s with ≈ 0.35 s latency, honours `--time-limit`,
+  leaves no process or virtual display behind, and keeps concurrent adb
+  calls under 150 ms; polling screencap gives 0.15–0.66 fps on the same
+  panel. `raw-frames` ignores its time limit and is dropped. Adopted as an
+  opt-in `serve --stream-human` source (needs ffmpeg on PATH) behind the
+  same capture threads; screencap stays the default until the Fold proof.
 - **Kotlin Compose desktop app** (the Trailblaze shape): a heavier toolchain
   for a one-person lab, and no browser-native trace viewer for free.
 - **FastAPI/uvicorn plus a React trace viewer**: nicer streaming

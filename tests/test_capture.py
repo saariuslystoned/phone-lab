@@ -8,7 +8,8 @@ from pathlib import Path
 
 from PIL import Image
 
-from phonelab.capture import CaptureManager
+from phonelab.capture import CaptureError, CaptureManager, DisplayCapture, FrameSource
+from phonelab.displays import Display
 from phonelab.sessions import Registry
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -82,6 +83,66 @@ class CaptureManagerTests(unittest.TestCase):
         finally:
             manager.stop()
 
+    def test_display_capture_with_frame_source(self):
+        png = _png(10, 20)
+        jpeg = b"fake-jpeg"
 
-if __name__ == "__main__":
-    unittest.main()
+        class FakeSource(FrameSource):
+            label = "fake"
+
+            def __init__(self):
+                self.calls = 0
+
+            def next_frame(self):
+                self.calls += 1
+                if self.calls == 1:
+                    return png, jpeg, 10, 20
+                elif self.calls == 2:
+                    return None
+                else:
+                    raise CaptureError("boom")
+
+        adb = FakeAdb()
+        d = Display(
+            sf_id="1", unique_id="u1", name="Disp", kind="physical",
+            logical_id=0, width=10, height=20, state="ON", owner=None,
+            status_bar_px=0, role="human"
+        )
+        source = FakeSource()
+        cap = DisplayCapture(adb, d, source=source)
+        cap.start()
+        try:
+            self.assertTrue(_wait(lambda: cap.frame is not None and cap.frame.seq == 1))
+            self.assertEqual(cap.frame.png, png)
+            self.assertEqual(cap.frame.jpeg, jpeg)
+            self.assertTrue(_wait(lambda: cap.error == "boom"))
+            self.assertEqual(cap.frame.seq, 1)
+            self.assertEqual(cap.frame.png, png)
+        finally:
+            cap.stop()
+            cap.join(timeout=2.0)
+
+    def test_capture_manager_source_factory(self):
+        adb = FakeAdb()
+
+        class CustomSource(FrameSource):
+            label = "custom-source"
+
+            def next_frame(self):
+                return _png(8, 16), b"jpg", 8, 16
+
+        def factory(display: Display) -> FrameSource | None:
+            if display.role == "human":
+                return CustomSource()
+            return None
+
+        manager = CaptureManager(adb, Registry(Path("/nonexistent")), rediscover_every=60, max_height=1000, source_factory=factory)
+        manager.rediscover()
+        try:
+            displays = manager.state()["displays"]
+            human = [d for d in displays if d["role"] == "human"][0]
+            agent = [d for d in displays if d["role"] == "agent"][0]
+            self.assertEqual(human["source"], "custom-source")
+            self.assertEqual(agent["source"], "screencap")
+        finally:
+            manager.stop()
