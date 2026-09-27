@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>phone-lab</title>
+<style>
+  :root { --bg: #121216; --panel: #1c1c22; --line: #2a2a33; --fg: #e8e8ee; --muted: #9a9aa8; --blue: #5aa0ff; --red: #ff5a5a; --green: #3ddc84; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.4 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  header { display: flex; align-items: center; gap: 14px; padding: 10px 16px; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--bg); z-index: 2; flex-wrap: wrap; }
+  header h1 { font-size: 18px; margin: 0; letter-spacing: .02em; }
+  .muted { color: var(--muted); }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--red); display: inline-block; }
+  .dot.ok { background: var(--green); }
+  button { background: #2b2b36; color: var(--fg); border: 1px solid #3a3a48; border-radius: 6px; padding: 6px 12px; cursor: pointer; font: inherit; }
+  button:hover { background: #353542; }
+  button:disabled { opacity: .5; cursor: default; }
+  #toast { color: var(--muted); font-size: 12px; margin-left: auto; max-width: 60%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, Menlo, monospace; }
+  main { display: flex; flex-wrap: wrap; gap: 16px; padding: 16px; align-items: flex-start; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px; display: flex; flex-direction: column; gap: 8px; max-width: 100%; }
+  .head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .head .name { font-weight: 600; }
+  .badge { font-size: 11px; padding: 2px 7px; border-radius: 10px; background: #3a3a48; color: #ddd; text-transform: uppercase; letter-spacing: .04em; }
+  .badge.agent { background: #1f3d6b; color: #bcd8ff; }
+  .panel img { display: block; max-height: 72vh; max-width: 100%; width: auto; height: auto; background: #000; border-radius: 4px; }
+  .placeholder { width: 260px; height: 480px; display: flex; align-items: center; justify-content: center; background: #26262e; color: var(--muted); border-radius: 4px; }
+  .foot, .session { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .session { color: #bcd8ff; }
+  .session .low { color: var(--red); font-weight: 600; }
+  .error { color: var(--red); font-size: 12px; }
+  .empty { color: var(--muted); padding: 24px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>phone-lab</h1>
+  <span id="device" class="muted">connecting…</span>
+  <span id="dot" class="dot" title="green: /api/state answered within 3 s"></span>
+  <button id="freeze">Freeze frame</button>
+  <span id="toast"></span>
+</header>
+<main id="panels"><div class="empty">waiting for /api/state…</div></main>
+<script>
+(() => {
+  const panels = new Map();          // sf_id -> panel record
+  let lastOk = 0;                    // Date.now() of the last successful poll
+  let clockOffset = 0;               // client seconds minus server seconds
+  const main = document.getElementById('panels');
+  const dot = document.getElementById('dot');
+  const toast = document.getElementById('toast');
+
+  const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+
+  function createPanel(d) {
+    const root = el('div', 'panel');
+    const head = el('div', 'head');
+    const name = el('span', 'name'); const logical = el('span', 'muted'); const badge = el('span', 'badge');
+    head.append(name, logical, badge);
+    const media = el('div');
+    const img = el('img'); img.alt = ''; img.loading = 'eager';
+    const placeholder = el('div', 'placeholder', 'display off');
+    const foot = el('div', 'foot');
+    const session = el('div', 'session'); session.hidden = true;
+    const error = el('div', 'error'); error.hidden = true;
+    root.append(head, media, foot, session, error);
+    return { root, name, logical, badge, media, img, placeholder, foot, session, error,
+             seq: null, capturedAt: null, fps: 0, size: '', leaseMs: null, leaseAt: 0, lastAction: null, showing: null };
+  }
+
+  function showMedia(p, node) {
+    if (p.showing !== node) { p.media.replaceChildren(node); p.showing = node; }
+  }
+
+  function render(state) {
+    const d = state.device || {};
+    document.getElementById('device').textContent = `${d.model || '?'} · Android ${d.android_release || '?'}${state.inventory_error ? ' · inventory error' : ''}`;
+    const seen = new Set();
+    const order = [];
+    for (const disp of state.displays || []) {
+      seen.add(disp.sf_id);
+      let p = panels.get(disp.sf_id);
+      if (!p) { p = createPanel(disp); panels.set(disp.sf_id, p); }
+      order.push(p.root);
+      p.name.textContent = disp.name;
+      p.logical.textContent = `logical ${disp.logical_id == null ? '?' : disp.logical_id}`;
+      p.badge.textContent = disp.role; p.badge.className = `badge ${disp.role}`;
+      p.size = `${disp.width ?? '?'}x${disp.height ?? '?'}`;
+      p.fps = disp.fps || 0; p.capturedAt = disp.captured_at;
+      if (disp.state === 'OFF') {
+        p.placeholder.textContent = 'display off'; showMedia(p, p.placeholder);
+      } else if (disp.seq == null) {
+        p.placeholder.textContent = disp.error || 'waiting for first frame'; showMedia(p, p.placeholder);
+      } else {
+        if (disp.seq !== p.seq) { p.seq = disp.seq; p.img.src = `/frame/${disp.sf_id}.jpg?seq=${disp.seq}`; }
+        showMedia(p, p.img);
+      }
+      const err = disp.error && disp.state !== 'OFF' ? disp.error : '';
+      p.error.hidden = !err; p.error.textContent = err;
+      if (disp.role === 'agent') {
+        p.session.hidden = false;
+        const s = disp.session;
+        if (!s || s.state === 'unknown') { p.session.textContent = 'session unknown to phone-lab'; p.leaseMs = null; p.lastAction = null; }
+        else {
+          p.leaseMs = s.lease_remaining_now_ms ?? 0; p.leaseAt = Date.now();
+          p.lastAction = s.last_action || null;
+          const label = s.label || (s.session_id || '').slice(0, 8);
+          p.session.replaceChildren(
+            el('span', null, `Cua ${label} · ${s.package || '?'} · `),
+            Object.assign(el('span', 'lease'), { textContent: 'lease …' }),
+            el('span', null, ' · last '),
+            Object.assign(el('span', 'la'), { textContent: '…' }));
+        }
+      } else { p.session.hidden = true; }
+    }
+    for (const [id, p] of panels) if (!seen.has(id)) { p.root.remove(); panels.delete(id); }
+    if (order.length) main.replaceChildren(...order); else main.replaceChildren(el('div', 'empty', 'no displays reported'));
+  }
+
+  function tick() {
+    dot.classList.toggle('ok', Date.now() - lastOk < 3000);
+    const now = Date.now() / 1000 - clockOffset;
+    for (const p of panels.values()) {
+      const age = p.capturedAt ? Math.max(0, now - p.capturedAt).toFixed(1) + ' s' : '–';
+      p.foot.textContent = `${p.size} · seq ${p.seq ?? '–'} · ${p.fps.toFixed(1)} fps · age ${age}`;
+      if (!p.session.hidden && p.leaseMs != null) {
+        const ms = Math.max(0, p.leaseMs - (Date.now() - p.leaseAt));
+        const lease = p.session.querySelector('.lease');
+        if (lease) { lease.textContent = `lease ${(ms / 1000).toFixed(0)} s`; lease.classList.toggle('low', ms < 10000); }
+        const la = p.session.querySelector('.la');
+        if (la) {
+          const a = p.lastAction;
+          la.textContent = a ? `${a.kind} ${a.result}${a.at ? ' · ' + Math.max(0, now - a.at).toFixed(0) + ' s ago' : ''}` : '–';
+        }
+      }
+    }
+  }
+
+  async function poll() {
+    try {
+      const r = await fetch('/api/state', { cache: 'no-store' });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const state = await r.json();
+      lastOk = Date.now();
+      if (typeof state.server_time === 'number') clockOffset = Date.now() / 1000 - state.server_time;
+      render(state);
+    } catch (e) { /* the dot turns red after 3 s without a good answer */ }
+  }
+
+  document.getElementById('freeze').addEventListener('click', async (ev) => {
+    const btn = ev.currentTarget; btn.disabled = true; toast.textContent = 'freezing…';
+    try {
+      const r = await fetch('/api/freeze', { method: 'POST' });
+      const j = await r.json();
+      toast.textContent = r.ok ? `freeze: ${j.image} (${j.panels} panels)` : `freeze failed: ${j.error || r.status}`;
+    } catch (e) { toast.textContent = 'freeze failed: ' + e; }
+    btn.disabled = false;
+  });
+
+  setInterval(poll, 500);
+  setInterval(tick, 250);
+  poll();
+})();
+</script>
+</body>
+</html>
