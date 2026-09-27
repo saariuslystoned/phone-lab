@@ -116,8 +116,10 @@ after the stream ends (displays before/during/after: 1/2/1).
   `CaptureManager` takes a `source_factory(display)`; `serve --stream-human`
   (default off) supplies it for the human display with logical id 0 only.
 - Stream frames are downscaled (`--max-height`), unlike screencap frames,
-  so a freeze taken from a streamed panel is a downscaled PNG. The
-  manifest still carries the true size.
+  so a freeze taken from a streamed panel is a downscaled PNG, its manifest
+  reports the decoded size (964x1000 on the Fold), and the status-bar crop
+  (sized for the full panel) over-crops it. Both need a follow-up before
+  streaming could be the default.
 - `stop()` on the stream source always runs `pkill -INT screenrecord` and
   checks `pidof` afterwards, the cleanup that the raw-frames trials showed
   is necessary after a host-side kill.
@@ -147,6 +149,22 @@ after the stream ends (displays before/during/after: 1/2/1).
 - **Personal screen.** A stream of display 0 is the human's screen at 60
   fps; nothing leaves `runs/`, and the spike deleted its stream files.
 
+## Fold proof (same evening)
+
+`runs/phone-lab-runs/pixel-10-pro-fold/spike-display0-fold-20260927/PROOF.md`.
+Open posture, inner panel 2076x2152 as logical 0. `serve --stream-human`
+with a concurrent `cua demo`: the Cua display kept capturing at 1.2–1.7
+fps, its session stayed `active`, 45 s of taps passed, the freeze wrote
+three panels with the human one from the stream, and after SIGTERM no
+process or `ScreenRecorder` display remained. Instrumented h264 trials on
+the inner panel: 34 fps encoded at 0.2 MB/s, 0.29–0.65 s latency once
+primed, time limit honoured, clean. Two limits found: the first frame
+after an idle period surfaces about 5 s after motion starts (on both
+phones; ffmpeg `-threads 1` does not change it), so a short burst of
+motion may not appear until more motion follows; and the streamed freeze
+manifest reports the decoded size with an over-sized status-bar crop.
+Posture change was not exercised.
+
 ## Recommendation for Bobby
 
 **Adopt, opt-in.** The h264 path clears the 0.8 fps gate by two orders of
@@ -155,4 +173,5 @@ is confined to a source abstraction plus one new module behind
 `--stream-human`. Keep screencap as the default until the Fold proof (Cua
 session running, a posture change, and one freeze from a streamed panel)
 passes; then decide whether streaming becomes the default for human
-panels. Drop raw-frames entirely.
+panels. Drop raw-frames entirely. Fold proof (below) passed the Cua and
+freeze checks; the posture change and the two freeze follow-ups remain.
