@@ -1,0 +1,11 @@
+# Raw captures and run output can contain personal screen content; keep them out of git.
+runs/
+*-runs/
+captures/
+*.png
+!docs/**/*.png
+__pycache__/
+*.pyc
+node_modules/
+.venv/
+.DS_Store
