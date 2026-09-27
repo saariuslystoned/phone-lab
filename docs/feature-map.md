@@ -90,8 +90,10 @@ that reviewers can see where new code should land.
   `trail replay --times N` creates and stops one session per run (≈ 1.5 s).
 - **Replay speed is capture-bound.** With both panels captured a five-step
   run takes ≈ 70 s on the Fold (inner-panel screencap ≈ 4.2 s, twice per
-  step); `--agent-only` brings it to ≈ 21 s. A downscaled human capture is
-  the obvious next lever.
+  step); `--agent-only` brings it to ≈ 21 s. The cost is the device-side PNG and
+  its transfer (slice 1 measured it transport-bound), so host-side
+  downscaling would not help; the levers are capturing human panels only
+  after each step, making agent-only the default, or a streaming capture.
 - **Fold posture moves logical ids.** Logical 0 is the active panel (inner
   when open, cover when closed; the other is OFF under id 3 or 1). Trees
   and refs are per logical id, so a posture change is a new display.
