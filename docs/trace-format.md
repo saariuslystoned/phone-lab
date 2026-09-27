@@ -173,7 +173,7 @@ provider), with `display_id`, `timeout_ms`, and the kind's own arguments.
 | `fail` | The predicate did not hold, or the action was delivered but the check failed. |
 | `refused` | Cua refused the action (`message` carries the reason, e.g. `frame_stale` after the retry budget). |
 | `error` | Exception, adb failure, lost lease. |
-| `healed` | Slice 5: ref was missing, a candidate inside the bound was used; `detail.healed` describes it. |
+| `healed` | Slice 5: ref was missing, a candidate inside the bound was used; `detail.heal` describes it (HealResult.to_json(): status, ref, note). |
 | `skipped` | Not attempted because an earlier step failed and the trail stops on failure. |
 
 `message` is a short human line or `null`; `detail` is free-form but must be
@@ -203,7 +203,8 @@ Panels are listed in display order and both lists cover the same displays.
 
 Map of `logical-<n>` → file name for every display where a tree was read,
 separately for before and after. Missing key means no tree was read for
-that display in that phase.
+that display in that phase. `trees.heal` = `{"recorded": ..., "current": ...}`
+is present whenever heal ran, and `run.json` has `heal.max_distance_px`.
 
 ## `tree-<phase>-logical-<n>.json` — `phone-lab.tree.v1`
 

@@ -235,3 +235,17 @@ raises `ValueError`.
   after slice 3` with real function and test names.
 - Device proof (roadmap: move the fixture's button and show one healed
   replay and one loud failure) is a slice-3 follow-up once replay exists.
+
+## Integration (as built)
+
+The trail embeds the recorded node under `action.recorded` (smaller than reading
+the source run directory, and a trail stays self-contained). During replay, when
+a target ref is not found in the current tree, replay builds a one-node recorded
+tree from `action.recorded` and calls `phonelab.heal.heal`.
+
+- Step result details store healing evidence under `result.detail.heal` as
+  `HealResult.to_json()`.
+- Evidence trees are saved next to the step with filenames referenced in
+  `trees.heal = {"recorded": ..., "current": ...}`.
+- CLI argument `--max-heal-px` defaults to 120; passing `0` means heal only in place.
+- Trails recorded without `recorded` fail loudly with a hint to re-record to enable healing.

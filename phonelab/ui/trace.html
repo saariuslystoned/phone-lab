@@ -210,6 +210,14 @@
     border-radius: 4px;
     color: #bcd8ff;
   }
+  .heal-note {
+    margin-top: 10px;
+    padding-top: 8px;
+    border-top: 1px solid var(--line);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
 
   /* Screens row */
   .screens-grid {
@@ -903,10 +911,52 @@
     }
     if (res.detail && typeof res.detail === 'object') {
       for (const [k, v] of Object.entries(res.detail)) {
+        if (k === 'heal') continue;
         kv.append(el('span', 'k', k + ':'), el('span', 'v', typeof v === 'object' ? JSON.stringify(v) : String(v)));
       }
     }
     card.appendChild(kv);
+
+    if (res.detail && res.detail.heal) {
+      const healDoc = res.detail.heal;
+      const note = healDoc.note || healDoc;
+      const healDiv = el('div', 'heal-note');
+      const kind = note.kind || healDoc.status || 'heal';
+      const badgeCls = `badge status-${kind === 'healed' ? 'healed' : 'fail'}`;
+      const healHdr = el('div');
+      healHdr.appendChild(el('span', badgeCls, `heal: ${kind}`));
+      healDiv.appendChild(healHdr);
+
+      const hkv = el('div', 'kv-table');
+      if (note.reason) {
+        hkv.append(el('span', 'k', 'reason:'), el('span', 'v', note.reason));
+      }
+      hkv.append(el('span', 'k', 'distance:'), el('span', 'v', `${note.distance_px != null ? note.distance_px : '-'} / ${note.max_distance_px != null ? note.max_distance_px : '-'} px`));
+
+      const refLine = el('span', 'v');
+      refLine.append(
+        note.missing_ref ? el('span', 'ref-badge', note.missing_ref) : el('span', null, '-'),
+        document.createTextNode(' → '),
+        note.ref ? el('span', 'ref-badge', note.ref) : el('span', null, '-')
+      );
+      hkv.append(el('span', 'k', 'ref:'), refLine);
+
+      if (note.recorded && note.recorded.centre) {
+        const recStr = `[${note.recorded.centre.join(', ')}]`;
+        const curStr = (note.current && note.current.centre) ? `[${note.current.centre.join(', ')}]` : '-';
+        hkv.append(el('span', 'k', 'centre:'), el('span', 'v', `${recStr} → ${curStr}`));
+      }
+
+      if (note.message) {
+        hkv.append(el('span', 'k', 'message:'), el('span', 'v', note.message));
+      }
+
+      const candCount = Array.isArray(note.candidates) ? note.candidates.length : (note.candidates != null ? note.candidates : 0);
+      hkv.append(el('span', 'k', 'candidates:'), el('span', 'v', String(candCount)));
+
+      healDiv.appendChild(hkv);
+      card.appendChild(healDiv);
+    }
 
     if (otherStep && (res.status !== (otherStep.result && otherStep.result.status))) {
       card.classList.add('differs');

@@ -54,8 +54,9 @@ class FakeDriver:
         self.calls: list[tuple[str, ...]] = []
         self.first_tap_refused = False
 
-    def create(self, allow_apps: list[str], label: str) -> dict:
+    def create(self, allow_apps: list[str], label: str, *, size: str | None = None, density: int | None = None) -> dict:
         self.calls.append(("create", allow_apps, label))
+        self.create_kwargs = {"size": size, "density": density}
         lease = 20000 if self.report_lease_20s else 60000
         return {
             "status": "ok",
@@ -90,7 +91,9 @@ class FakeDriver:
             self.first_tap_refused = True
             raise CuaError("refused", "frame_stale")
 
-        if (x, y) == (540, 263):
+        expected_x = 540 + getattr(self.backend, "dx", 0)
+        expected_y = 263 + getattr(self.backend, "dy", 0)
+        if (x, y) == (expected_x, expected_y):
             self.backend.counter += 1
         return {"status": "ok", "exit_code": 0, "data": {}}
 
@@ -359,6 +362,11 @@ class ReplayUnitTests(unittest.TestCase):
 
             # Ignore created_at difference
             rec_dict["created_at"] = fix_dict["created_at"]
+            for s in rec_dict["steps"]:
+                if s["action"]["kind"] == "tap":
+                    self.assertIn("recorded", s["action"])
+                    self.assertEqual(s["action"]["recorded"]["id"], "ai.cua.fixture.notes:id/increment")
+                    del s["action"]["recorded"]
             self.assertEqual(rec_dict, fix_dict)
 
     def test_4_times_runs_in_one_session_with_multiple_launches(self):

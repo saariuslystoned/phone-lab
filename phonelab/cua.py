@@ -61,10 +61,15 @@ class CuaDriver:
             raise CuaError(str(reply.get("status") or "error"), self.adb.redact(str(reason)))
         return reply
 
-    def create(self, allow_apps: list[str], label: str) -> dict:
+    def create(self, allow_apps: list[str], label: str, *, size: str | None = None, density: int | None = None) -> dict:
+        """`size` is WIDTHxHEIGHT and `density` dpi for the Cua virtual display (driver defaults: 1080x1920, 320)."""
         args: list[str] = ["session", "create"]
         for app in allow_apps:
             args += ["--allow-app", app]
+        if size:
+            args += ["--size", size]
+        if density:
+            args += ["--density", str(density)]
         return self.call(*args, "--label", label)
 
     def launch(self, sid: str, package: str) -> dict:

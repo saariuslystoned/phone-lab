@@ -64,12 +64,14 @@ Spec: [slice-4-trace-viewer.md](slice-4-trace-viewer.md).
 
 ## Slice 5 — Self-heal
 
-- On replay, when a ref is missing, search the current tree for the nearest
+- [x] On replay, when a ref is missing, search the current tree for the nearest
   candidate (same class and label, moved; same label, class changed) within a
   bounded distance and repair the trail with a recorded "healed" note.
-- Anything outside the bound fails loudly with both captures attached.
-- Prove: move the fixture's button (fixture variant or window resize) and show
-  one healed replay and one loud failure.
+- [x] Anything outside the bound fails loudly with both captures attached.
+- [x] Prove: move the fixture's button (fixture variant or window resize) and show
+  one healed replay and one loud failure. Done 2026-09-27 on the
+  Fold via Cua display density 380 (healed, 40 px) and 640 (out_of_bound,
+  340 px); `proof/slice-5-self-heal/PROOF.md`.
 
 ## Deferred
 

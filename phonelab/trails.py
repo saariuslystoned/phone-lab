@@ -125,6 +125,9 @@ def validate_action(action: dict) -> dict:
         ref = res.get("ref")
         if not isinstance(ref, str) or not ref:
             raise TrailError("tap requires a non-empty ref")
+        if "recorded" in res:
+            if not isinstance(res["recorded"], dict):
+                raise TrailError("tap action 'recorded' must be an object")
     elif kind == "set_text":
         ref = res.get("ref")
         if not isinstance(ref, str) or not ref:
@@ -133,6 +136,9 @@ def validate_action(action: dict) -> dict:
         if not isinstance(text, str):
             raise TrailError("set_text requires string text")
         res["clear_first"] = bool(res.get("clear_first", True))
+        if "recorded" in res:
+            if not isinstance(res["recorded"], dict):
+                raise TrailError("set_text action 'recorded' must be an object")
     elif kind == "key":
         keycode = res.get("keycode")
         if not isinstance(keycode, str) or not keycode:
