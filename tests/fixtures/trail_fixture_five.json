@@ -1,0 +1,98 @@
+{
+  "schema": "phone-lab.trail.v1",
+  "name": "fixture-five",
+  "created_at": "2026-09-27T09:29:55-04:00",
+  "recorded_on": {
+    "model": "Pixel 10 Pro Fold",
+    "android_release": "17",
+    "api_level": 37
+  },
+  "session": {
+    "allow_apps": [
+      "ai.cua.fixture.notes"
+    ],
+    "label": "phone-lab trail fixture-five"
+  },
+  "steps": [
+    {
+      "name": "launch fixture",
+      "display": "agent",
+      "action": {
+        "kind": "launch",
+        "package": "ai.cua.fixture.notes",
+        "fresh": true
+      },
+      "predicate": {
+        "kind": "fixture_counter",
+        "expected": 0,
+        "timeout_ms": 8000
+      }
+    },
+    {
+      "name": "tap increment",
+      "display": "agent",
+      "action": {
+        "kind": "tap",
+        "ref": "e7f67h",
+        "hint": {
+          "class": "android.widget.Button",
+          "label": "INCREMENT",
+          "resource_id": "ai.cua.fixture.notes:id/increment"
+        }
+      },
+      "predicate": {
+        "kind": "fixture_counter",
+        "expected": 1,
+        "timeout_ms": 5000
+      }
+    },
+    {
+      "name": "tap increment",
+      "display": "agent",
+      "action": {
+        "kind": "tap",
+        "ref": "e7f67h",
+        "hint": {
+          "class": "android.widget.Button",
+          "label": "INCREMENT",
+          "resource_id": "ai.cua.fixture.notes:id/increment"
+        }
+      },
+      "predicate": {
+        "kind": "fixture_counter",
+        "expected": 2,
+        "timeout_ms": 5000
+      }
+    },
+    {
+      "name": "tap increment",
+      "display": "agent",
+      "action": {
+        "kind": "tap",
+        "ref": "e7f67h",
+        "hint": {
+          "class": "android.widget.Button",
+          "label": "INCREMENT",
+          "resource_id": "ai.cua.fixture.notes:id/increment"
+        }
+      },
+      "predicate": {
+        "kind": "fixture_counter",
+        "expected": 3,
+        "timeout_ms": 5000
+      }
+    },
+    {
+      "name": "wait for Count: 3",
+      "display": "agent",
+      "action": {
+        "kind": "wait_for"
+      },
+      "predicate": {
+        "kind": "text_present",
+        "text": "Count: 3",
+        "timeout_ms": 5000
+      }
+    }
+  ]
+}

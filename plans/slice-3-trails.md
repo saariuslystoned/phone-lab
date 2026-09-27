@@ -327,9 +327,10 @@ def replay(backend, registry, runs_dir: Path, trail_path: Path, *, times: int = 
 `replay` with `stop_on_fail` writes the remaining steps as `skipped`
 (`timings.phases: {}`, no captures, `captures: {"before": [], "after": []}`,
 `trees: {"before": {}, "after": {}}`) and `result.status: "fail"`.
-`times > 1` runs the trail that many times **in one Cua session** (launch
-with `fresh: true` restarts the app each time, so counters start at 0),
-one run directory each, and prints a final line `replay fixture-five: 3/3
+`times > 1` runs the trail that many times, **one Cua session per run**
+(after `am force-stop` a second `app launch` in the same session is refused
+with `owned_task_missing`, measured on the Fold), each run with `launch
+fresh: true` so counters start at 0, one run directory each, and prints a final line `replay fixture-five: 3/3
 pass · 34.7 s, 33.9 s, 35.1 s`.
 
 `record` derives predicates (`derive=True`), collects the steps into a
@@ -386,8 +387,8 @@ raises `KeyboardInterrupt` as the other commands do. Exit codes: 0 pass,
      and keeps the explicit `text_present`, writes `trails/<name>.json` that
      `load_trail` accepts and that equals the fixture trail apart from
      `created_at`.
-  4. `times=3` → three run directories, distinct ids, one `create` and one
-     `stop` on the fake driver, three `launch` calls.
+  4. `times=3` → three run directories, distinct ids, three `create` and
+     three `stop` calls on the fake driver, three `launch` calls.
   5. `capture_human=False` → human panel `image: null`,
      `capture_error: "skipped"`, no PNG written for logical 0.
   6. `trace.list_runs` on the runs dir lists the replays newest first.

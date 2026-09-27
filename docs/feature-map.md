@@ -30,16 +30,18 @@ device proof yet or the proof missed its target), `planned`.
 
 | Feature | Modules / endpoints | Automated tests | Device proof | Status |
 |---|---|---|---|---|
-| Record a session as readable steps with actions and display | `phonelab/trails.py`, `POST /api/trails` | trail schema round-trip | `runs/phone-lab-runs/<run>/trail.json` | planned |
-| Deterministic replay with before/after captures and predicates | `phonelab/replay.py`, `phonelab/capture.py` | replay on recorded fixtures | five-step fixture trail replayed three times green | planned |
+| Trail file (`phone-lab.trail.v1`): readable steps with action (`launch`, `tap` by ref, `set_text`, `key`, `swipe`, `wait_for`, `sleep`), display alias, predicate (`fixture_counter`, `text_present`, `ref_present`, `ref_absent`); Cua packages only; refs never coordinates | `phonelab/trails.py` (`Trail`, `Step`, `validate_action`, `validate_predicate`, `load_trail`, `save_trail`, `parse_script`, `derive_predicate`) | `tests/test_trails.py` (round-trip, validation, script grammar, derivation table, non-Cua package refused) | `runs/phone-lab-runs/pixel-10-pro-fold/trails/fixture-five.json` (recorded on the Fold; committed copy `tests/fixtures/trail_fixture_five.json`) | proven |
+| `python3 -m phonelab trail record <script>`: execute a plain script live, resolve refs from fresh trees, derive predicates from the fixture oracle (counter before/after), write the trail and a `record` run | `phonelab/replay.py` (`Runner.run_step` with `derive=True`, `record`), `phonelab/__main__.py` `trail record` | `tests/test_replay.py::test_record_derives_predicates` | `runs/phone-lab-runs/pixel-10-pro-fold/fixture-five-record-20260927-092836/` (5/5 ok, predicates 0,1,2,3 + `text_present "Count: 3"`, 78.7 s) | proven |
+| `python3 -m phonelab trail replay <trail> --times N`: deterministic replay without an LLM, one Cua session per run, every step re-captures every display before and after, re-resolves the ref, checks its predicate; stop-on-fail marks the rest `skipped` | `phonelab/replay.py` (`Runner`, `replay`), `trail replay` | `tests/test_replay.py` (pass run validated through `phonelab.trace` loaders and sha256; missing ref → fail + skipped; times=3; agent-only; index order) | `fixture-five-replay-20260927-{093015,093343,093453,093605}/` (4/4 pass, 20/20 steps ok, 68.6–72.2 s each with both panels; `fixture-five-replay-20260927-094218/` agent-only 20.8 s); `fixture-wrongref-replay-20260927-093732/` (fail at step 2 `ref zzzzzz not found in tree (5 refs)`, steps 3–4 skipped) | proven; the "tap step ≤ 6 s with both displays" target is missed (13–17 s, inner-panel screencap ≈ 4.2 s each) and met agent-only (4.6–4.8 s) |
+| Runs written in the trace format the viewer reads (`run.json` first with `result: null`, rewritten per step; `steps/NNN/step.json`, per-display PNGs with freeze-manifest fields, `phone-lab.tree.v1`); runner owns its registry record (`owner: "phonelab trail"`, `last_action` per step) | `phonelab/replay.py` (`RunWriter`, `capture_all`, `to_tree_doc`) | `tests/test_replay.py` (loaders, sha256, crop) | the six run directories above opened by `python3 -m phonelab trace` (`slice-3-20260927/viewer-observation.txt`) | proven |
 
 ## Slice 4 — Trace viewer
 
 | Feature | Modules / endpoints | Automated tests | Device proof | Status |
 |---|---|---|---|---|
-| Run-directory format that trails write and the viewer reads (`run.json`, `steps/NNN/step.json`, per-display PNGs with freeze-manifest fields, `phone-lab.tree.v1`) | `docs/trace-format.md`; `tests/synth_run.py` generates a conforming run without a device | `tests/test_trace.py` (generator round-trip: sha256 per file, files exist, steps summary) | waits for slice 3 to write a real run on the Fold | implemented |
-| Trace page over a run directory: run picker, timeline, per-step before/after screenshots of every display, action, predicate, result, timings bar, lazy element tree with the acted ref highlighted | `phonelab/trace.py` (`list_runs`, `load_run`, `load_step`, `safe_file`, `handle_get`); `phonelab/ui/trace.html`; `GET /trace`, `GET /api/runs`, `GET /api/runs/<run>`, `GET /api/runs/<run>/steps/<n>`, `GET /runs/<run>/<file>` mounted in the live `ViewerHandler` and in the device-free `python3 -m phonelab trace` server (port 8792) | `tests/test_trace.py` (index, loaders, path safety, HTTP routes on port 0) | open a slice-3 run on the Fold | implemented, not proven |
-| Diff two runs side by side: aligned timeline, per-display screen same/differs from `png_sha256`, action and result equality, duration delta, tree refs added/removed | `phonelab/ui/trace.html` (client-side diff from two `step.json` documents) | none (vanilla page); checked by the cockpit on synthetic runs | diff two slice-3 replays | implemented, not proven |
+| Run-directory format that trails write and the viewer reads (`run.json`, `steps/NNN/step.json`, per-display PNGs with freeze-manifest fields, `phone-lab.tree.v1`) | `docs/trace-format.md`; `tests/synth_run.py` generates a conforming run without a device | `tests/test_trace.py` (generator round-trip: sha256 per file, files exist, steps summary) | `runs/phone-lab-runs/pixel-10-pro-fold/fixture-five-replay-20260927-093605/` written by slice 3 and read back by the viewer (`slice-3-20260927/viewer-observation.txt`) | proven |
+| Trace page over a run directory: run picker, timeline, per-step before/after screenshots of every display, action, predicate, result, timings bar, lazy element tree with the acted ref highlighted | `phonelab/trace.py` (`list_runs`, `load_run`, `load_step`, `safe_file`, `handle_get`); `phonelab/ui/trace.html`; `GET /trace`, `GET /api/runs`, `GET /api/runs/<run>`, `GET /api/runs/<run>/steps/<n>`, `GET /runs/<run>/<file>` mounted in the live `ViewerHandler` and in the device-free `python3 -m phonelab trace` server (port 8792) | `tests/test_trace.py` (index, loaders, path safety, HTTP routes on port 0) | `slice-3-20260927/viewer-observation.txt`: replay run opened at step 3, both panels' before/after, action, predicate, result, timings bar, tree with `e7f67h` | proven |
+| Diff two runs side by side: aligned timeline, per-display screen same/differs from `png_sha256`, action and result equality, duration delta, tree refs added/removed | `phonelab/ui/trace.html` (client-side diff from two `step.json` documents) | none (vanilla page); checked by the cockpit on synthetic runs | `slice-3-20260927/viewer-observation.txt`: replays 093605 vs 093453 at step 3 (inner display same, agent screen differs, action differs on snapshot_id, result same, Δ +1321 ms, +0 −0 refs) | proven |
 
 ## Slice 5 — Self-heal
 
@@ -82,7 +84,14 @@ that reviewers can see where new code should land.
 - **Demo owns its registry record.** `POST /api/tap` writes `last_action =
   tap ref`, but a running `cua demo` rewrites the record every 2 s from its
   own copy, so the viewer strip shows the demo's last action again within
-  2 s. Slice 3's recorder should own the session instead.
+  2 s. Slice 3's runner owns its own session and record instead.
+- **One Cua session per replay run.** After `am force-stop` a second `app
+  launch` in the same Cua session is refused with `owned_task_missing`, so
+  `trail replay --times N` creates and stops one session per run (≈ 1.5 s).
+- **Replay speed is capture-bound.** With both panels captured a five-step
+  run takes ≈ 70 s on the Fold (inner-panel screencap ≈ 4.2 s, twice per
+  step); `--agent-only` brings it to ≈ 21 s. A downscaled human capture is
+  the obvious next lever.
 - **Fold posture moves logical ids.** Logical 0 is the active panel (inner
   when open, cover when closed; the other is OFF under id 3 or 1). Trees
   and refs are per logical id, so a posture change is a new display.

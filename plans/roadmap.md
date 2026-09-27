@@ -40,20 +40,24 @@ Spec: [slice-1-live-viewer.md](slice-1-live-viewer.md).
 
 Spec: [slice-2-element-refs.md](slice-2-element-refs.md).
 
-## Slice 3 — Trails: record and replay
+## Slice 3 — Trails: record and replay (2026-09-27, proven on the Fold)
 
-- Record a session as readable steps, each with the recorded actions
-  (tap ref, set text, launch, wait-for predicate) and the display they ran on.
-- Replay deterministically without an LLM; every step re-captures before and
-  after and checks its predicate.
-- Prove: record a five-step fixture trail, replay it three times, all green,
-  with a trace directory per run.
+- [x] Record a session as readable steps, each with the recorded actions
+      (tap ref, set text, launch, wait-for predicate) and the display they ran on.
+      `set_text`, `key`, `swipe` are implemented and unit-tested, not device-proven.
+- [x] Replay deterministically without an LLM; every step re-captures before and
+      after and checks its predicate.
+- [x] Prove: record a five-step fixture trail, replay it three times, all green,
+      with a trace directory per run. See `proof/slice-3-trails/PROOF.md`.
 
-## Slice 4 — Trace viewer
+Spec: [slice-3-trails.md](slice-3-trails.md).
 
-- Static page over `runs/phone-lab-runs/<run>/`: per-step screenshots of
-  every display, element tree, action, result, timings.
-- Prove: open a slice-3 run, step through it, diff two runs side by side.
+## Slice 4 — Trace viewer (2026-09-27, proven with slice-3 runs)
+
+- [x] Static page over `runs/phone-lab-runs/<run>/`: per-step screenshots of
+      every display, element tree, action, result, timings.
+- [x] Prove: open a slice-3 run, step through it, diff two runs side by side.
+      See `proof/slice-3-trails/PROOF.md` (viewer section).
 
 Format the viewer reads and slice 3 writes: [docs/trace-format.md](../docs/trace-format.md).
 Spec: [slice-4-trace-viewer.md](slice-4-trace-viewer.md).
