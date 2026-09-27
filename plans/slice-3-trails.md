@@ -199,8 +199,9 @@ def parse_script_line(line: str) -> dict | None
     # None for blank/comment; else {"kind": ..., "action": {...}, "predicate": {...}|None, "name": str|None,
     #   "timeout_ms": int|None, "explicit_predicate": bool}; `name` lines return {"kind": "name", "name": text}
 def parse_script(text: str) -> list[dict]          # applies `name` lines to the following step; raises TrailError(line number)
-def derive_predicate(kind: str, action: dict, observed: dict) -> dict | None
-    # the rule table above; `observed` = {"oracle_counter": int|None, "oracle_ok": bool}
+def derive_predicate(kind: str, action: dict, observed: dict | None = None) -> dict | None
+    # the non-oracle rows of the rule table (set_text → text_present, tap/key/swipe with a ref → ref_present, else None);
+    # the oracle rows (launch/tap on the fixture) are derived inside Runner.run_step, which owns the before/after reads
 ```
 
 Validation rules: unknown `kind` → `TrailError`; `tap`/`set_text` need a

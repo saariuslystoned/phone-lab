@@ -413,32 +413,11 @@ def parse_script(text: str) -> list[dict]:
     return steps
 
 
-def derive_predicate(kind: str, action: dict, observed: dict) -> dict | None:
-    timeout_ms = observed.get("timeout_ms")
-    if timeout_ms is None:
-        timeout_ms = 8000 if kind == "launch" else DEFAULT_TIMEOUT_MS
+def derive_predicate(kind: str, action: dict, observed: dict | None = None) -> dict | None:
+    """Derive non-oracle predicate: set_text -> text_present, tap/key/swipe with a ref -> ref_present, else None."""
+    obs = observed or {}
+    timeout_ms = obs.get("timeout_ms", DEFAULT_TIMEOUT_MS)
 
-    pkg = observed.get("package") or action.get("package")
-    is_fixture_notes = (pkg == "ai.cua.fixture.notes")
-
-    # If it is fixture notes (or oracle answered)
-    if is_fixture_notes and kind in ("launch", "tap"):
-        if observed.get("oracle_ok") and observed.get("oracle_counter") is not None:
-            return {
-                "kind": "fixture_counter",
-                "expected": observed["oracle_counter"],
-                "timeout_ms": timeout_ms,
-            }
-        return None
-
-    if observed.get("oracle_ok") and observed.get("oracle_counter") is not None and kind in ("launch", "tap"):
-        return {
-            "kind": "fixture_counter",
-            "expected": observed["oracle_counter"],
-            "timeout_ms": timeout_ms,
-        }
-
-    # Elsewhere:
     if kind == "set_text":
         text = action.get("text")
         if text:
@@ -446,11 +425,10 @@ def derive_predicate(kind: str, action: dict, observed: dict) -> dict | None:
         ref = action.get("ref")
         if ref:
             return {"kind": "ref_present", "ref": ref, "timeout_ms": timeout_ms}
-    elif kind in ("tap", "key", "swipe"):
+        return None
+    if kind in ("tap", "key", "swipe"):
         ref = action.get("ref")
         if ref:
             return {"kind": "ref_present", "ref": ref, "timeout_ms": timeout_ms}
-        return None
-    elif kind in ("sleep", "wait_for"):
         return None
     return None

@@ -15,7 +15,7 @@ from PIL import Image
 from phonelab.cua import CuaError
 from phonelab.displays import Display
 from phonelab.refs import assign_refs
-from phonelab.replay import AdbBackend, Runner, capture_all, record, replay, to_tree_doc
+from phonelab.replay import AdbBackend, Runner, _make_skipped_step, capture_all, record, replay, to_tree_doc
 from phonelab.sessions import Registry
 from phonelab.trace import list_runs, load_run, load_step
 from phonelab.trails import Trail, load_trail, save_trail
@@ -47,9 +47,10 @@ class FakeAdb:
 
 
 class FakeDriver:
-    def __init__(self, backend: "FakeBackend", report_lease_20s: bool = False) -> None:
+    def __init__(self, backend: "FakeBackend", report_lease_20s: bool = False, display_id: int = 98) -> None:
         self.backend = backend
         self.report_lease_20s = report_lease_20s
+        self.display_id = display_id
         self.calls: list[tuple[str, ...]] = []
         self.first_tap_refused = False
 
@@ -61,7 +62,7 @@ class FakeDriver:
             "exit_code": 0,
             "data": {
                 "session_id": "fake-sid-1",
-                "display_id": 98,
+                "display_id": self.display_id,
                 "lease_remaining_ms": lease,
                 "label": label,
             },
@@ -103,15 +104,22 @@ class FakeDriver:
 
 
 class FakeBackend:
-    def __init__(self, report_lease_20s: bool = False) -> None:
+    def __init__(self, report_lease_20s: bool = False, display_id: int = 98) -> None:
         self.adb = FakeAdb()
-        self.driver = FakeDriver(self, report_lease_20s=report_lease_20s)
+        self.display_id = display_id
+        self.driver = FakeDriver(self, report_lease_20s=report_lease_20s, display_id=display_id)
         self.counter = 0
         self._tree_fixture = json.loads(FIXTURE_TREE_PATH.read_text())
         self.started = False
         self.stopped = False
+        self.stop_count = 0
+        self.inventory_calls = 0
+        self.raise_inventory_after_open_session = False
 
     def inventory(self) -> list[Display]:
+        self.inventory_calls += 1
+        if self.raise_inventory_after_open_session and any(c[0] == "create" for c in self.driver.calls):
+            raise RuntimeError("inventory failed after open_session")
         return [
             Display(
                 sf_id="1",
@@ -128,10 +136,10 @@ class FakeBackend:
             ),
             Display(
                 sf_id="2",
-                unique_id="virtual:com.android.shell,2000,Cua agent,98",
+                unique_id=f"virtual:com.android.shell,2000,Cua agent,{self.display_id}",
                 name="Cua agent",
                 kind="virtual",
-                logical_id=98,
+                logical_id=self.display_id,
                 width=100,
                 height=100,
                 state="ON",
@@ -165,7 +173,7 @@ class FakeBackend:
     def fixture_state(self) -> dict | None:
         return {
             "counter": self.counter,
-            "display_id": 98,
+            "display_id": self.display_id,
             "controls": {"increment": {"x": 540, "y": 263}},
         }
 
@@ -182,6 +190,7 @@ class FakeBackend:
 
     def stop(self) -> None:
         self.stopped = True
+        self.stop_count += 1
 
 
 class ReplayUnitTests(unittest.TestCase):
@@ -287,6 +296,23 @@ class ReplayUnitTests(unittest.TestCase):
             for i in (2, 3, 4):
                 s = load_step(runs_dir1, run_id1, i)
                 self.assertEqual(s["result"]["status"], "skipped")
+                self.assertEqual(s["action"]["display_id"], 98)
+
+            # Assert skipped steps carry the real session display_id (e.g. 77) without a literal fallback
+            backend_77 = FakeBackend(display_id=77)
+            runs_dir_77 = Path(tmp) / "runs_77"
+            registry_77 = Registry(runs_dir_77, "pixel-10-pro-fold")
+            ret_77 = replay(backend_77, registry_77, runs_dir_77, bad_trail_path, stop_on_fail=True)
+            self.assertEqual(ret_77, 1)
+            run_id_77 = list_runs(runs_dir_77)[0]["run_id"]
+            for i in (2, 3, 4):
+                s_77 = load_step(runs_dir_77, run_id_77, i)
+                self.assertEqual(s_77["result"]["status"], "skipped")
+                self.assertEqual(s_77["action"]["display_id"], 77)
+
+            # Assert _make_skipped_step accepts display_id=None
+            s_none = _make_skipped_step(0, trail.steps[0], None)
+            self.assertIsNone(s_none["action"]["display_id"])
 
             # 2. continue-on-fail (stop_on_fail=False): runs remaining steps
             runs_dir2 = Path(tmp) / "runs2"
@@ -395,6 +421,33 @@ class ReplayUnitTests(unittest.TestCase):
             runs = list_runs(runs_dir)
             self.assertEqual(len(runs), 2)
             self.assertGreater(runs[0]["created_at"], runs[1]["created_at"])
+
+    def test_record_cleans_up_when_inventory_fails_after_open_session(self):
+        backend = FakeBackend()
+        backend.raise_inventory_after_open_session = True
+        script = "launch ai.cua.fixture.notes\n"
+
+        with tempfile.TemporaryDirectory() as tmp:
+            runs_dir = Path(tmp) / "runs"
+            trails_dir = Path(tmp) / "trails"
+            registry = Registry(runs_dir, "pixel-10-pro-fold")
+
+            with self.assertRaises(RuntimeError):
+                record(backend, registry, runs_dir, trails_dir, "fail-run", script)
+
+            # Assert fake driver recorded a "stop" call for the created session
+            stop_calls = [c for c in backend.driver.calls if c[0] == "stop"]
+            self.assertEqual(len(stop_calls), 1)
+            self.assertEqual(stop_calls[0][1], "fake-sid-1")
+
+            # Assert backend.stop() was called
+            self.assertTrue(backend.stopped)
+            self.assertGreaterEqual(backend.stop_count, 1)
+
+            # Assert registry record is state "stopped"
+            recs = registry.load_all()
+            self.assertEqual(len(recs), 1)
+            self.assertEqual(recs[0].state, "stopped")
 
 
 if __name__ == "__main__":

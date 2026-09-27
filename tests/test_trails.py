@@ -143,39 +143,7 @@ class TrailsUnitTests(unittest.TestCase):
         self.assertIn("line 2", str(ctx.exception))
 
     def test_derive_predicate_table(self):
-        # 1. launch on fixture notes with oracle ok
-        pred = derive_predicate(
-            "launch",
-            {"kind": "launch", "package": "ai.cua.fixture.notes"},
-            {"oracle_ok": True, "oracle_counter": 0},
-        )
-        self.assertEqual(pred, {"kind": "fixture_counter", "expected": 0, "timeout_ms": 8000})
-
-        # 2. launch on fixture notes with oracle failed
-        pred_none = derive_predicate(
-            "launch",
-            {"kind": "launch", "package": "ai.cua.fixture.notes"},
-            {"oracle_ok": False, "oracle_counter": None},
-        )
-        self.assertIsNone(pred_none)
-
-        # 3. tap on fixture notes with oracle ok
-        pred_tap = derive_predicate(
-            "tap",
-            {"kind": "tap", "ref": "e7f67h"},
-            {"oracle_ok": True, "oracle_counter": 1},
-        )
-        self.assertEqual(pred_tap, {"kind": "fixture_counter", "expected": 1, "timeout_ms": 5000})
-
-        # 4. tap elsewhere (no oracle) -> ref_present
-        pred_tap_else = derive_predicate(
-            "tap",
-            {"kind": "tap", "ref": "custom_ref"},
-            {"oracle_ok": False, "oracle_counter": None},
-        )
-        self.assertEqual(pred_tap_else, {"kind": "ref_present", "ref": "custom_ref", "timeout_ms": 5000})
-
-        # 5. set_text -> text_present
+        # 1. set_text -> text_present
         pred_txt = derive_predicate(
             "set_text",
             {"kind": "set_text", "ref": "r1", "text": "hello"},
@@ -183,7 +151,43 @@ class TrailsUnitTests(unittest.TestCase):
         )
         self.assertEqual(pred_txt, {"kind": "text_present", "text": "hello", "timeout_ms": 5000})
 
-        # 6. sleep and wait_for -> None
+        # 2. set_text with ref only -> ref_present
+        pred_txt_ref = derive_predicate(
+            "set_text",
+            {"kind": "set_text", "ref": "r1"},
+            {},
+        )
+        self.assertEqual(pred_txt_ref, {"kind": "ref_present", "ref": "r1", "timeout_ms": 5000})
+
+        # 3. tap with a ref -> ref_present; tap without ref -> None
+        pred_tap = derive_predicate(
+            "tap",
+            {"kind": "tap", "ref": "e7f67h"},
+            {},
+        )
+        self.assertEqual(pred_tap, {"kind": "ref_present", "ref": "e7f67h", "timeout_ms": 5000})
+        self.assertIsNone(derive_predicate("tap", {"kind": "tap"}, {}))
+
+        # 4. key with a ref -> ref_present; key without ref -> None
+        pred_key = derive_predicate(
+            "key",
+            {"kind": "key", "keycode": "KEYCODE_BACK", "ref": "k1"},
+            {},
+        )
+        self.assertEqual(pred_key, {"kind": "ref_present", "ref": "k1", "timeout_ms": 5000})
+        self.assertIsNone(derive_predicate("key", {"kind": "key", "keycode": "KEYCODE_BACK"}, {}))
+
+        # 5. swipe with a ref -> ref_present (with custom timeout_ms); swipe without ref -> None
+        pred_swipe = derive_predicate(
+            "swipe",
+            {"kind": "swipe", "from": [0, 0], "to": [100, 100], "ref": "s1"},
+            {"timeout_ms": 3000},
+        )
+        self.assertEqual(pred_swipe, {"kind": "ref_present", "ref": "s1", "timeout_ms": 3000})
+        self.assertIsNone(derive_predicate("swipe", {"kind": "swipe", "from": [0, 0], "to": [100, 100]}, {}))
+
+        # 6. launch, sleep, wait_for -> None
+        self.assertIsNone(derive_predicate("launch", {"kind": "launch", "package": "ai.cua.fixture.notes"}, {}))
         self.assertIsNone(derive_predicate("sleep", {"kind": "sleep", "ms": 100}, {}))
         self.assertIsNone(derive_predicate("wait_for", {"kind": "wait_for"}, {}))
 

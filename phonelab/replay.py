@@ -549,9 +549,9 @@ class Runner:
             updated_at=now,
             device_tag=tag,
         )
-        self.registry.write(rec)
         self.session_record = rec
         self.display_id = disp_id
+        self.registry.write(rec)
         return rec
 
     def close_session(self) -> None:
@@ -929,7 +929,7 @@ class Runner:
         return step_doc, used_predicate
 
 
-def _make_skipped_step(index: int, step: Step, display_id: int) -> dict:
+def _make_skipped_step(index: int, step: Step, display_id: int | None) -> dict:
     now = time.time()
     pred_doc = None
     if step.predicate:
@@ -986,31 +986,32 @@ def record(
                 allow_apps.append(pkg)
 
     runner = Runner(backend, registry, runs_dir, capture_human=capture_human)
-    backend.start()
-    session_rec = runner.open_session(allow_apps, default_label(name))
-
-    run_id = make_run_id(runs_dir, name, "record")
-    device_info = backend.props()
-    writer = RunWriter(
-        runs_dir=runs_dir,
-        run_id=run_id,
-        kind="record",
-        device=device_info,
-        trail_path_src=None,
-        trail_name=name,
-        step_count=len(parsed_steps),
-        source_run_id=None,
-        displays=backend.inventory(),
-        session=session_rec.to_json(),
-        command="record",
-    )
-    writer.begin()
-
-    recorded_steps: list[Step] = []
-    run_status = "pass"
-    fail_message = None
-
+    writer: RunWriter | None = None
     try:
+        backend.start()
+        session_rec = runner.open_session(allow_apps, default_label(name))
+
+        run_id = make_run_id(runs_dir, name, "record")
+        device_info = backend.props()
+        writer = RunWriter(
+            runs_dir=runs_dir,
+            run_id=run_id,
+            kind="record",
+            device=device_info,
+            trail_path_src=None,
+            trail_name=name,
+            step_count=len(parsed_steps),
+            source_run_id=None,
+            displays=backend.inventory(),
+            session=session_rec.to_json(),
+            command="record",
+        )
+        writer.begin()
+
+        recorded_steps: list[Step] = []
+        run_status = "pass"
+        fail_message = None
+
         for idx, item in enumerate(parsed_steps):
             step = Step(
                 name=item["name"],
@@ -1032,31 +1033,33 @@ def record(
                 run_status = "fail"
                 fail_message = step_doc["result"].get("message")
                 break
+
+        now = time.time()
+        trail = Trail(
+            name=name,
+            created_at=_iso(now),
+            recorded_on=device_info,
+            session={"allow_apps": allow_apps, "label": default_label(name)},
+            steps=recorded_steps,
+        )
+        save_trail(trail, writer.run_dir / "trail.json")
+
+        if run_status == "pass":
+            save_trail(trail, trails_dir / f"{name}.json")
+
+        writer.finish(run_status, fail_message)
+        return 0 if run_status == "pass" else 1
     except KeyboardInterrupt:
-        writer.finish("aborted", "interrupted")
+        if writer is not None and writer.finished_at is None:
+            writer.finish("aborted", "interrupted")
         raise
     except Exception as exc:
-        writer.finish("aborted", backend.adb.redact(str(exc)))
+        if writer is not None and writer.finished_at is None:
+            writer.finish("aborted", backend.adb.redact(str(exc)))
         raise
     finally:
         runner.close_session()
         backend.stop()
-
-    now = time.time()
-    trail = Trail(
-        name=name,
-        created_at=_iso(now),
-        recorded_on=device_info,
-        session={"allow_apps": allow_apps, "label": default_label(name)},
-        steps=recorded_steps,
-    )
-    save_trail(trail, writer.run_dir / "trail.json")
-
-    if run_status == "pass":
-        save_trail(trail, trails_dir / f"{name}.json")
-
-    writer.finish(run_status, fail_message)
-    return 0 if run_status == "pass" else 1
 
 
 def replay(
@@ -1075,8 +1078,6 @@ def replay(
     trail = load_trail(trail_path)
 
     runner = Runner(backend, registry, runs_dir, capture_human=capture_human)
-    backend.start()
-
     allow_apps = trail.session.get("allow_apps", ["ai.cua.fixture.notes"])
     label = trail.session.get("label", default_label(trail.name))
 
@@ -1085,7 +1086,9 @@ def replay(
     writer: RunWriter | None = None
 
     try:
+        backend.start()
         for iter_idx in range(times):
+            writer = None
             # One Cua session per run: after `am force-stop` a second `app launch` in the same
             # session is refused with `owned_task_missing` (measured on the Fold, 2026-09-27).
             session_rec = runner.open_session(allow_apps, label)
@@ -1111,7 +1114,7 @@ def replay(
             iter_message = None
             has_failed = False
 
-            display_id = runner.display_id or 98
+            display_id = runner.display_id
             for idx, step in enumerate(trail.steps):
                 if has_failed and stop_on_fail:
                     skipped_doc = _make_skipped_step(idx, step, display_id)
