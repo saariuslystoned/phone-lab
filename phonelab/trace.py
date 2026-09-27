@@ -169,98 +169,8 @@ def safe_file(runs_dir: Path, run_id: str, rel: str) -> Path:
     return target
 
 
-def _send_resp(handler: BaseHTTPRequestHandler, status: int, body: bytes, content_type: str,
-               extra: dict[str, str] | None = None) -> None:
-    if hasattr(handler, "_send"):
-        handler._send(status, body, content_type, extra)
-    else:
-        handler.send_response(status)
-        handler.send_header("Content-Type", content_type)
-        handler.send_header("Content-Length", str(len(body)))
-        handler.send_header("Cache-Control", "no-store")
-        for key, value in (extra or {}).items():
-            handler.send_header(key, value)
-        handler.end_headers()
-        handler.wfile.write(body)
-
-
-def _send_json(handler: BaseHTTPRequestHandler, payload, status: int = 200) -> None:
-    if hasattr(handler, "_json"):
-        handler._json(payload, status)
-    else:
-        _send_resp(handler, status, json.dumps(payload).encode(), "application/json")
-
-
-def handle_get(handler: BaseHTTPRequestHandler, runs_dir: Path, path: str) -> bool:
-    """Route trace GET requests. Returns False when not a trace route."""
-    try:
-        if path == "/trace":
-            if not TRACE_UI_PATH.is_file():
-                _send_json(handler, {"error": "trace UI not found"}, 404)
-            else:
-                _send_resp(handler, 200, TRACE_UI_PATH.read_bytes(), "text/html; charset=utf-8")
-            return True
-
-        if path == "/api/runs":
-            runs = list_runs(runs_dir)
-            _send_json(handler, runs, 200)
-            return True
-
-        if path.startswith("/api/runs/"):
-            rest = path[len("/api/runs/"):]
-            parts = rest.split("/")
-            if len(parts) == 1 and parts[0]:
-                run_id = parts[0]
-                _send_json(handler, load_run(runs_dir, run_id), 200)
-                return True
-            if len(parts) == 3 and parts[0] and parts[1] == "steps" and parts[2]:
-                run_id = parts[0]
-                step_str = parts[2]
-                if not re.fullmatch(r"\d+", step_str):
-                    raise TraceError(400, f"invalid step index: {step_str}")
-                index = int(step_str)
-                _send_json(handler, load_step(runs_dir, run_id, index), 200)
-                return True
-            return False
-
-        if path.startswith("/runs/"):
-            rest = path[len("/runs/"):]
-            parts = rest.split("/", 1)
-            if len(parts) == 2 and parts[0] and parts[1]:
-                run_id, rel = parts[0], parts[1]
-                target = safe_file(runs_dir, run_id, rel)
-                content_type = "image/png" if target.suffix.lower() == ".png" else "application/json"
-                _send_resp(handler, 200, target.read_bytes(), content_type)
-                return True
-            return False
-
-        return False
-
-    except TraceError as exc:
-        _send_json(handler, {"error": exc.message}, exc.status)
-        return True
-    except Exception as exc:
-        _send_json(handler, {"error": str(exc)}, 500)
-        return True
-
-
-class TraceServer(ThreadingHTTPServer):
-    """HTTP server dedicated to serving trace runs and UI."""
-    daemon_threads = True
-    allow_reuse_address = True
-
-    def __init__(self, address: tuple[str, int], runs_dir: Path) -> None:
-        super().__init__(address, TraceHandler)
-        self.runs_dir = Path(runs_dir)
-
-
-class TraceHandler(BaseHTTPRequestHandler):
-    """Handler for trace-only server routes."""
-    server_version = "phone-lab/0.1"
-    server: TraceServer
-
-    def log_message(self, fmt: str, *args) -> None:
-        print(f"{time.strftime('%H:%M:%S')} {fmt % args}", flush=True)
+class ResponseMixin:
+    """Shared response writers so headers cannot drift between the viewer and the trace server."""
 
     def _send(self, status: int, body: bytes, content_type: str, extra: dict[str, str] | None = None) -> None:
         self.send_response(status)
@@ -274,6 +184,79 @@ class TraceHandler(BaseHTTPRequestHandler):
 
     def _json(self, payload, status: int = 200) -> None:
         self._send(status, json.dumps(payload).encode(), "application/json")
+
+
+def handle_get(handler: ResponseMixin, runs_dir: Path, path: str) -> bool:
+    """Route trace GET requests. Returns False when not a trace route."""
+    try:
+        if path == "/trace":
+            if not TRACE_UI_PATH.is_file():
+                handler._json({"error": "trace UI not found"}, 404)
+            else:
+                handler._send(200, TRACE_UI_PATH.read_bytes(), "text/html; charset=utf-8")
+            return True
+
+        if path == "/api/runs":
+            runs = list_runs(runs_dir)
+            handler._json(runs, 200)
+            return True
+
+        if path.startswith("/api/runs/"):
+            rest = path[len("/api/runs/"):]
+            parts = rest.split("/")
+            if len(parts) == 1 and parts[0]:
+                run_id = parts[0]
+                handler._json(load_run(runs_dir, run_id), 200)
+                return True
+            if len(parts) == 3 and parts[0] and parts[1] == "steps" and parts[2]:
+                run_id = parts[0]
+                step_str = parts[2]
+                if not re.fullmatch(r"\d+", step_str):
+                    raise TraceError(400, f"invalid step index: {step_str}")
+                index = int(step_str)
+                handler._json(load_step(runs_dir, run_id, index), 200)
+                return True
+            return False
+
+        if path.startswith("/runs/"):
+            rest = path[len("/runs/"):]
+            parts = rest.split("/", 1)
+            if len(parts) == 2 and parts[0] and parts[1]:
+                run_id, rel = parts[0], parts[1]
+                target = safe_file(runs_dir, run_id, rel)
+                content_type = "image/png" if target.suffix.lower() == ".png" else "application/json"
+                handler._send(200, target.read_bytes(), content_type)
+                return True
+            return False
+
+        return False
+
+    except TraceError as exc:
+        handler._json({"error": exc.message}, exc.status)
+        return True
+    except Exception as exc:
+        handler.log_message("trace error on %s: %s", path, exc)
+        handler._json({"error": "internal error"}, 500)
+        return True
+
+
+class TraceServer(ThreadingHTTPServer):
+    """HTTP server dedicated to serving trace runs and UI."""
+    daemon_threads = True
+    allow_reuse_address = True
+
+    def __init__(self, address: tuple[str, int], runs_dir: Path) -> None:
+        super().__init__(address, TraceHandler)
+        self.runs_dir = Path(runs_dir)
+
+
+class TraceHandler(ResponseMixin, BaseHTTPRequestHandler):
+    """Handler for trace-only server routes."""
+    server_version = "phone-lab/0.1"
+    server: TraceServer
+
+    def log_message(self, fmt: str, *args) -> None:
+        print(f"{time.strftime('%H:%M:%S')} {fmt % args}", flush=True)
 
     def do_GET(self) -> None:
         path = urlsplit(self.path).path

@@ -80,6 +80,16 @@ def resolve_serial(explicit: str | None, model: str | None = None, allow_emulato
     return None, f"{len(pool)} devices match ({seen}); pass --serial or --model"
 
 
+def resolve_runs_dir(flag: str | None, state: dict) -> Path:
+    """Resolve the runs directory: flag overrides, else state['runs_dir'], else fallback."""
+    if flag:
+        return Path(flag)
+    state_dir = state.get("runs_dir")
+    if state_dir:
+        return Path(state_dir)
+    return Path("runs/phone-lab-runs")
+
+
 def stats(values: list[float]) -> dict | None:
     if not values:
         return None
@@ -211,7 +221,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--interval", type=float, default=5)
     ap.add_argument("--min-fps", type=float, default=0.8)
     ap.add_argument("--min-ok-taps", type=int, default=10)
-    ap.add_argument("--runs-dir", default="runs/phone-lab-runs")
+    ap.add_argument("--runs-dir", default=None, help="defaults to runs_dir from /api/state (the device dir)")
     ap.add_argument("--require-agent", dest="require_agent", action="store_true", default=True)
     ap.add_argument("--no-require-agent", dest="require_agent", action="store_false")
     ap.add_argument("--skip-freeze", action="store_true")
@@ -234,12 +244,14 @@ def main(argv: list[str] | None = None) -> int:
     if not serial:
         print(json.dumps({"result": "setup", "error": f"cannot determine the device serial for the privacy grep ({source})"}, indent=1))
         return 2
+    runs_dir = resolve_runs_dir(args.runs_dir, state)
     verdict.numbers["device"] = state.get("device")
     verdict.numbers["serial_source"] = source
+    verdict.numbers["runs_dir"] = str(runs_dir)
     verdict.numbers["sample"] = sample(base, args.duration, args.interval, verdict, args.require_agent, args.min_fps, args.min_ok_taps)
     if not args.skip_freeze:
         verdict.numbers["freeze"] = check_freeze(base, verdict)
-    privacy_grep(serial, Path(args.repo), Path(args.runs_dir), verdict)
+    privacy_grep(serial, Path(args.repo), runs_dir, verdict)
     out = verdict.to_json()
     text = json.dumps(out, indent=1)
     if serial in text:

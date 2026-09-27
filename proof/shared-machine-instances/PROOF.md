@@ -70,3 +70,29 @@ every device's viewer; presence is advisory.
    the AGENTS.md line reflects that, the adb relaxation was not acted on.
 3. Whether `phone-lab-verify/scripts/verify.py` should read `runs_dir`
    from `/api/state` instead of needing `--runs-dir <device dir>`.
+
+## Two-phone proof
+
+Run: 2026-09-27, cockpit Claude (worktree branch `claude/sad-dirac-826852`),
+both registered test phones on USB ADB, default runs root
+(`runs/phone-lab-runs` in the worktree). Raw evidence is git-ignored under
+`runs/phone-lab-runs/followups-20260927/` (cited as `RUN/`); the driver is
+`RUN/two-phone.sh`, its console output `RUN/two-phone-driver.txt`.
+No `cua demo` was run; the XL has no Cua runtime. Both viewers were
+stopped as soon as the capture finished (`pgrep` empty afterwards).
+
+| Check | Result | Evidence |
+|---|---|---|
+| Two `serve --port 0` at once bind distinct ports and print them | Fold `http://127.0.0.1:55120/`, XL `http://127.0.0.1:55121/` | `RUN/fold-viewer.log`, `RUN/xl-viewer.log` (banner lines) |
+| `/api/state` reports its own device | Fold: `device_tag=pixel-10-pro-fold`, `runs_dir=runs/phone-lab-runs/pixel-10-pro-fold`, displays Inner (logical 0, ON) and Outer (logical 3, OFF). XL: `device_tag=pixel-10-pro-xl`, `runs_dir=runs/phone-lab-runs/pixel-10-pro-xl`, one display (logical 0, ON) | `RUN/fold-state.json`, `RUN/xl-state.json` |
+| Freeze lands under its own device dir | Fold `pixel-10-pro-fold/20260927/freeze-090401.{png,json}` (2 panels, manifest `device.device_tag=pixel-10-pro-fold`, PNG 35 377 bytes; outer panel is a placeholder because that display is OFF with the phone open). XL `pixel-10-pro-xl/20260927/freeze-090401.{png,json}` (1 panel, `device_tag=pixel-10-pro-xl`, PNG 472 393 bytes) | `RUN/fold-freeze.json`, `RUN/xl-freeze.json`, `RUN/registry-isolation.txt` |
+| Second viewer for the same device on another port | Third `serve --model "Pixel 10 Pro Fold" --port 0` bound `55170`, printed `another viewer for pixel-10-pro-fold is running: http://127.0.0.1:55120/ (pid …, heartbeat 5 s ago)`; the first viewer's `/api/state.viewers` then listed `{url: http://127.0.0.1:55170/, heartbeat_age_s: 2.3}` | `RUN/fold-viewer-2.log`, `RUN/fold-viewers-after.txt` |
+| Bare `python3 -m phonelab inventory` with two phones | exit 2, `error: 2 authorized physical devices attached: Pixel 10 Pro Fold (physical), Pixel 10 Pro XL (physical); pass --serial, --model, or set ANDROID_SERIAL` (models only) | `RUN/bare-inventory.txt` |
+| Registry isolation | Synthetic tagged records written to each device dir; `Registry(root, "pixel-10-pro-fold").load_all()` sees only `synth-fold-0001`, the XL registry only `synth-xl-0001` | `RUN/registry-isolation.txt` |
+| No serial anywhere | Serial scan (both serials read from `adb devices -l` inside a script, never echoed): 0 hits in the checkout and 0 hits under `runs/` including both state JSONs, freeze manifests, and registry files | `RUN/serial-scan.txt` |
+
+Note: the slice-2 session's Fold viewer on 8791 did not appear in `viewers`
+because it runs from a different worktree and therefore a different runs
+root. Presence is per device dir, as specified; a viewer in another
+checkout is invisible, which is a known limit worth a line in
+`docs/feature-map.md` if it matters.

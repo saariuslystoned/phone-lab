@@ -22,6 +22,7 @@ from .capture import CaptureManager, Frame
 from .displays import Display
 from .presence import ViewerPresence
 from .sessions import Registry
+from .trace import ResponseMixin
 
 UI_PATH = Path(__file__).resolve().parent / "ui" / "index.html"
 SCHEMA = "phone-lab.freeze.v1"
@@ -209,25 +210,12 @@ class ViewerServer(ThreadingHTTPServer):
             self.presence.beat()
 
 
-class ViewerHandler(BaseHTTPRequestHandler):
+class ViewerHandler(ResponseMixin, BaseHTTPRequestHandler):
     server_version = "phone-lab/0.1"
     server: ViewerServer
 
     def log_message(self, fmt: str, *args) -> None:  # one line per request, never a serial
         print(self.server.adb.redact(f"{time.strftime('%H:%M:%S')} {fmt % args}"), flush=True)
-
-    def _send(self, status: int, body: bytes, content_type: str, extra: dict[str, str] | None = None) -> None:
-        self.send_response(status)
-        self.send_header("Content-Type", content_type)
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
-        for key, value in (extra or {}).items():
-            self.send_header(key, value)
-        self.end_headers()
-        self.wfile.write(body)
-
-    def _json(self, payload, status: int = 200) -> None:
-        self._send(status, json.dumps(payload).encode(), "application/json")
 
     def do_GET(self) -> None:
         path = urlsplit(self.path).path
