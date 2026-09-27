@@ -21,6 +21,7 @@ class SessionRecord:
     last_action: dict | None
     owner: str
     updated_at: float
+    device_tag: str | None = None
 
     def lease_remaining_now(self, now: float | None = None) -> int:
         elapsed_ms = ((now if now is not None else time.time()) - self.lease_checked_at) * 1000
@@ -31,10 +32,19 @@ class SessionRecord:
 
 
 class Registry:
-    def __init__(self, runs_dir: Path) -> None:
-        self.dir = Path(runs_dir) / "sessions"
+    def __init__(self, runs_root: Path, device_tag: str | None = None) -> None:
+        self.device_tag = device_tag
+        runs_root = Path(runs_root)
+        if device_tag is None:
+            self.dir = runs_root / "sessions"
+            self.legacy_dir: Path | None = None
+        else:
+            self.dir = runs_root / device_tag / "sessions"
+            self.legacy_dir = runs_root / "sessions"
 
     def write(self, rec: SessionRecord) -> Path:
+        if rec.device_tag is None:
+            rec.device_tag = self.device_tag
         self.dir.mkdir(parents=True, exist_ok=True)
         path = self.dir / f"{rec.session_id}.json"
         tmp = path.with_suffix(".json.tmp")
@@ -43,14 +53,26 @@ class Registry:
         return path
 
     def load_all(self) -> list[SessionRecord]:
-        records = []
-        if not self.dir.is_dir():
-            return records
-        for path in sorted(self.dir.glob("*.json")):
-            try:
-                records.append(SessionRecord(**json.loads(path.read_text())))
-            except (ValueError, TypeError, OSError):
+        records: list[SessionRecord] = []
+        dirs = [self.dir]
+        if self.legacy_dir is not None and self.legacy_dir != self.dir:
+            dirs.append(self.legacy_dir)
+        seen_ids: set[str] = set()
+        for d in dirs:
+            if not d.is_dir():
                 continue
+            for path in sorted(d.glob("*.json")):
+                try:
+                    data = json.loads(path.read_text())
+                    rec = SessionRecord(**data)
+                except (ValueError, TypeError, OSError):
+                    continue
+                if self.device_tag is not None and rec.device_tag is not None and rec.device_tag != self.device_tag:
+                    continue
+                if rec.session_id in seen_ids:
+                    continue
+                seen_ids.add(rec.session_id)
+                records.append(rec)
         return records
 
     def by_display(self) -> dict[int, SessionRecord]:

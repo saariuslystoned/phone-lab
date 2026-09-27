@@ -2,13 +2,16 @@
 from __future__ import annotations
 
 import datetime as dt
+import errno
 import hashlib
 import io
 import json
 import re
+import sys
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import Any
 from urllib.parse import unquote, urlsplit
 
 from PIL import Image, ImageDraw, ImageFont
@@ -16,6 +19,7 @@ from PIL import Image, ImageDraw, ImageFont
 from .adb import Adb
 from .capture import CaptureManager, Frame
 from .displays import Display
+from .presence import ViewerPresence
 from .sessions import Registry
 
 UI_PATH = Path(__file__).resolve().parent / "ui" / "index.html"
@@ -30,6 +34,10 @@ TEXT = (235, 235, 240)
 MUTED = (170, 170, 180)
 GREY = (140, 140, 150)
 BLUE = (90, 160, 255)
+
+
+class PortInUse(OSError):
+    """`host:port` already has a listener. The message names the port."""
 
 
 def _iso(now: float) -> str:
@@ -158,16 +166,46 @@ def recent_freezes(runs_dir: Path, limit: int = 10) -> list[dict]:
     return out
 
 
+def bind_viewer(host: str = "127.0.0.1", port: int = 8791, adb: Any = None,
+                manager: Any = None, device: dict | None = None,
+                runs_dir: Path | str = Path("runs/phone-lab-runs")) -> ViewerServer:
+    """Bind the viewer socket before anything touches the device; port 0 picks a free port."""
+    try:
+        return ViewerServer((host, port), adb=adb, manager=manager, device=device, runs_dir=Path(runs_dir))
+    except OSError as exc:
+        if exc.errno == errno.EADDRINUSE:
+            raise PortInUse(
+                f"port {port} on {host} is already in use (another phone-lab viewer or another agent's server?); "
+                f"pass --port 0 to pick a free port or --port N for another one"
+            ) from exc
+        raise
+
+
+def viewer_url(server: ViewerServer) -> str:
+    """The URL with the port actually bound (matters for `--port 0`)."""
+    host, real_port = server.server_address[:2]
+    return f"http://{host}:{real_port}/"
+
+
 class ViewerServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
+    presence: ViewerPresence | None = None
 
-    def __init__(self, address: tuple[str, int], adb: Adb, manager: CaptureManager, device: dict, runs_dir: Path) -> None:
+    def __init__(self, address: tuple[str, int], adb: Any = None, manager: Any = None,
+                 device: dict | None = None, runs_dir: Path | str = Path("runs/phone-lab-runs"),
+                 presence: ViewerPresence | None = None) -> None:
         super().__init__(address, ViewerHandler)
         self.adb = adb
         self.manager = manager
-        self.device = device
+        self.device = device or {}
         self.runs_dir = Path(runs_dir)
+        self.presence = presence
+
+    def service_actions(self) -> None:
+        super().service_actions()
+        if self.presence is not None:
+            self.presence.beat()
 
 
 class ViewerHandler(BaseHTTPRequestHandler):
@@ -195,13 +233,14 @@ class ViewerHandler(BaseHTTPRequestHandler):
         if path == "/":
             self._send(200, UI_PATH.read_bytes(), "text/html; charset=utf-8")
         elif path == "/api/state":
-            state = self.server.manager.state()
+            state = self.server.manager.state() if self.server.manager else {}
+            viewers = self.server.presence.others() if self.server.presence else []
             self._json({"device": self.server.device, "server_time": time.time(),
-                        "runs_dir": str(self.server.runs_dir), **state})
+                        "runs_dir": str(self.server.runs_dir), "viewers": viewers, **state})
         elif path == "/api/freezes":
             self._json(recent_freezes(self.server.runs_dir))
         elif path.startswith("/frame/") and path.endswith(".jpg"):
-            frame = self.server.manager.frame(unquote(path[len("/frame/"):-len(".jpg")]))
+            frame = self.server.manager.frame(unquote(path[len("/frame/"):-len(".jpg")])) if self.server.manager else None
             if frame is None:
                 self._json({"error": "no frame yet"}, 404)
             else:
@@ -221,18 +260,44 @@ class ViewerHandler(BaseHTTPRequestHandler):
 
 
 def serve(adb: Adb, registry: Registry, host: str = "127.0.0.1", port: int = 8791,
-          runs_dir: Path = Path("runs/phone-lab-runs"), max_height: int = 1000) -> None:
+          runs_dir: Path = Path("runs/phone-lab-runs"), max_height: int = 1000) -> int:
     """Run the viewer until Ctrl-C; capture threads start immediately."""
-    device = {"model": adb.model, **adb.props()}
-    manager = CaptureManager(adb, registry, max_height=max_height)
-    manager.start()
-    server = ViewerServer((host, port), adb, manager, device, Path(runs_dir))
-    print(f"phone-lab viewer on http://{host}:{port}/ · {device['model']} · Android {device['android_release']} · runs {runs_dir}", flush=True)
+    runs_dir = Path(runs_dir)
     try:
+        server = bind_viewer(host, port, adb=adb, runs_dir=runs_dir)
+    except PortInUse as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    manager: CaptureManager | None = None
+    presence: ViewerPresence | None = None
+    try:
+        device_tag = getattr(adb, "tag", "unknown")
+        device = {"model": adb.model, "device_tag": device_tag, **adb.props()}
+        server.device = device
+
+        manager = CaptureManager(adb, registry, max_height=max_height)
+        server.manager = manager
+        manager.start()
+
+        real_port = server.server_address[1]
+        presence = ViewerPresence(runs_dir, host=host, port=real_port, device_tag=device_tag)
+        server.presence = presence
+        presence.start()
+
+        for other in presence.others():
+            age = int(round(other.get("heartbeat_age_s", 0)))
+            print(f"another viewer for {device_tag} is running: {other['url']} (pid {other['pid']}, heartbeat {age} s ago)", flush=True)
+        print(f"phone-lab viewer on {viewer_url(server)} · {device['model']} · Android {device['android_release']} · runs {runs_dir}", flush=True)
+
         server.serve_forever(poll_interval=0.5)
+        return 0
     except KeyboardInterrupt:
-        pass
+        return 0
     finally:
+        if presence is not None:
+            presence.stop()
         server.server_close()
-        manager.stop()
+        if manager is not None:
+            manager.stop()
         print("phone-lab viewer stopped", flush=True)

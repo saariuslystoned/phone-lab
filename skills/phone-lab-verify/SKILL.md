@@ -42,7 +42,7 @@ phone-lab", "prove the viewer", "run the slice check".
    `.git` and `runs/`) or in the run's manifests.
 9. **Stop the demo** (`kill <pid>` sends SIGTERM; the demo stops the Cua
    session cleanly). The agent panel must leave `/api/state` within 10 s
-   and the registry record under `runs/phone-lab-runs/sessions/` must say
+   and the registry record under `runs/phone-lab-runs/<device-tag>/sessions/` must say
    `"state": "stopped"`.
 10. **Write the proof stanza** (see below).
 
@@ -67,8 +67,12 @@ threshold silently.
 
 ```bash
 python3 skills/phone-lab-verify/scripts/verify.py --base-url http://127.0.0.1:8791 \
-  --duration 120 --interval 5 --min-fps 0.8 --min-ok-taps 10 [--serial S] [--skip-freeze] [--no-require-agent]
+  --duration 120 --interval 5 --min-fps 0.8 --min-ok-taps 10 \
+  --runs-dir runs/phone-lab-runs/<device-tag> [--serial S] [--skip-freeze] [--no-require-agent]
 ```
+
+`--runs-dir` is the device directory the viewer banner prints (the runs
+root plus the device tag), not the runs root.
 
 Exit 0 = pass, 1 = fail, 2 = setup problem (server unreachable, serial
 ambiguous). Emulators are ignored unless `--allow-emulators`; with several
