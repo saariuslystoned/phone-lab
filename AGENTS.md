@@ -7,7 +7,9 @@ phone-lab is a public MIT repo. These rules apply to every agent and worker.
 - Test device: Bobby's registered Pixel 10 Pro Fold on USB ADB. Never print,
   log, commit, or publish its serial; show the model name instead.
 - Second registered test device: Bobby's Pixel 10 Pro XL (adb model
-  `Pixel_10_Pro_XL`); agents may use it. No Cua runtime is deployed on it.
+  `Pixel_10_Pro_XL`); agents may use it. The Cua runtime and fixtures are
+  deployed on it too (2026-09-27, same build as the Fold), so `cua demo`
+  and agent-only freezes work there.
   With two phones attached every command needs `--model` or `--serial`.
   Its serial is under the same rule: never printed, logged, or committed.
 - Other agents may have emulators and phones attached to the same machine.

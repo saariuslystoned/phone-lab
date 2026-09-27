@@ -12,7 +12,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import unquote, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 
 from PIL import Image, ImageDraw, ImageFont
 
@@ -89,12 +89,18 @@ def _panel_image(display: Display, frame: Frame | None) -> tuple[Image.Image | N
 
 
 def compose(panels: list[tuple[Display, Frame | None]], device: dict, now: float,
-            sessions: dict[int, dict] | None = None) -> tuple[Image.Image, dict]:
+            sessions: dict[int, dict] | None = None,
+            panels_included: str = "all") -> tuple[Image.Image, dict]:
     """Pure composite builder: one labelled panel per display (ignored displays skipped) plus a manifest."""
+    if panels_included not in ("agent", "all"):
+        raise ValueError("panels must be agent or all")
     sessions = sessions or {}
     font_title = ImageFont.load_default(size=30)
     font_small = ImageFont.load_default(size=22)
-    tiles = [(d, f, *_panel_image(d, f)) for d, f in panels if d.role != "ignored"]
+    if panels_included == "agent":
+        tiles = [(d, f, *_panel_image(d, f)) for d, f in panels if d.role == "agent"]
+    else:
+        tiles = [(d, f, *_panel_image(d, f)) for d, f in panels if d.role != "ignored"]
     total_width = GUTTER + sum(width + GUTTER for _, _, _, width, _ in tiles) if tiles else 3 * GUTTER + 400
     height = GUTTER + TITLE_BAND + PANEL_HEIGHT + GUTTER + FOOTER_BAND + GUTTER
     canvas = Image.new("RGB", (total_width, height), CANVAS_BG)
@@ -134,17 +140,19 @@ def compose(panels: list[tuple[Display, Frame | None]], device: dict, now: float
         x += width + GUTTER
     footer = f"phone-lab freeze · {device.get('model')} · Android {device.get('android_release')} · {_iso(now)}"
     draw.text((GUTTER, height - GUTTER - FOOTER_BAND + 6), footer, fill=GREY, font=font_small)
-    manifest = {"schema": SCHEMA, "created_at": _iso(now), "device": device, "image": None, "panels": manifest_panels}
+    manifest = {"schema": SCHEMA, "created_at": _iso(now), "device": device, "image": None, "panels_included": panels_included, "panels": manifest_panels}
     return canvas, manifest
 
 
-def freeze(manager: CaptureManager, device: dict, runs_dir: Path) -> dict:
+def freeze(manager: CaptureManager, device: dict, runs_dir: Path,
+           panels_included: str = "all") -> dict:
     """Compose the current frames and write `<runs_dir>/<YYYYMMDD>/freeze-<HHMMSS>.png` plus `.json`."""
     now = time.time()
-    image, manifest = compose(manager.frames(), device, now, manager.sessions_now(now))
+    image, manifest = compose(manager.frames(), device, now, manager.sessions_now(now), panels_included=panels_included)
     day_dir = Path(runs_dir) / dt.datetime.fromtimestamp(now).strftime("%Y%m%d")
     day_dir.mkdir(parents=True, exist_ok=True)
-    stem = "freeze-" + dt.datetime.fromtimestamp(now).strftime("%H%M%S")
+    prefix = "freeze-agent-" if panels_included == "agent" else "freeze-"
+    stem = prefix + dt.datetime.fromtimestamp(now).strftime("%H%M%S")
     candidate, n = stem, 1
     while (day_dir / f"{candidate}.png").exists() or (day_dir / f"{candidate}.json").exists():
         candidate, n = f"{stem}-{n}", n + 1
@@ -152,13 +160,18 @@ def freeze(manager: CaptureManager, device: dict, runs_dir: Path) -> dict:
     image.save(png_path, format="PNG")
     manifest["image"] = png_path.name
     json_path.write_text(json.dumps(manifest, indent=2) + "\n")
-    return {"image": str(png_path), "manifest": str(json_path), "panels": len(manifest["panels"])}
+    return {
+        "image": str(png_path),
+        "manifest": str(json_path),
+        "panels": len(manifest["panels"]),
+        "panels_included": panels_included,
+    }
 
 
 def recent_freezes(runs_dir: Path, limit: int = 10) -> list[dict]:
     """The most recent freeze manifests (parsed), newest first; corrupt files are skipped."""
     def key(path: Path) -> tuple[str, str, int]:
-        match = re.fullmatch(r"freeze-(\d{6})(?:-(\d+))?", path.stem)
+        match = re.fullmatch(r"freeze-(?:agent-)?(\d{6})(?:-(\d+))?", path.stem)
         return (path.parent.name, match.group(1) if match else path.stem, int(match.group(2) or 0) if match else 0)
 
     paths = sorted(Path(runs_dir).glob("*/freeze-*.json"), key=key, reverse=True)
@@ -282,10 +295,16 @@ class ViewerHandler(ResponseMixin, BaseHTTPRequestHandler):
             self._json({"error": "not found"}, 404)
 
     def do_POST(self) -> None:
-        path = urlsplit(self.path).path
+        split = urlsplit(self.path)
+        path = split.path
         if path == "/api/freeze":
+            qs = parse_qs(split.query)
+            panels = qs.get("panels", ["all"])[0]
+            if panels not in ("agent", "all"):
+                self._json({"error": "panels must be agent or all"}, 400)
+                return
             try:
-                self._json(freeze(self.server.manager, self.server.device, self.server.runs_dir))
+                self._json(freeze(self.server.manager, self.server.device, self.server.runs_dir, panels_included=panels))
             except Exception as exc:  # report, never crash the server thread
                 self._json({"error": self.server.adb.redact(f"freeze failed: {exc}")}, 500)
         elif path == "/api/tap":

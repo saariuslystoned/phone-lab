@@ -96,3 +96,74 @@ because it runs from a different worktree and therefore a different runs
 root. Presence is per device dir, as specified; a viewer in another
 checkout is invisible, which is a known limit worth a line in
 `docs/feature-map.md` if it matters.
+
+## Two-phone proof, rerun with the XL as the primary device (2026-09-27)
+
+Run: 2026-09-27 16:33–16:34 local, cockpit Claude (worktree branch
+`claude/elegant-banach-970f2a`), both registered test phones on USB ADB,
+default runs root (`runs/phone-lab-runs` in the worktree). Raw evidence is
+git-ignored under `runs/phone-lab-runs/pixel-10-pro-xl/followups-20260927/`
+(cited as `RUN/`); driver `RUN/two-phone.sh`, console `RUN/two-phone-driver.txt`.
+The Fold viewer was read-only and lived 15 s (`RUN/fold-viewer.log`); no Cua
+session and no taps were run on either phone. `pgrep -f 'phonelab serve'`
+was empty at the end.
+
+| Check | Result | Evidence |
+|---|---|---|
+| Two `serve --port 0` at once bind distinct ports and print them | XL `http://127.0.0.1:60877/`, Fold `http://127.0.0.1:61134/` | `RUN/xl-viewer.log`, `RUN/fold-viewer.log` |
+| `/api/state` reports its own device | XL: `device_tag=pixel-10-pro-xl`, `runs_dir=runs/phone-lab-runs/pixel-10-pro-xl`, one display `Built-in Screen` (logical 0, ON, human). Fold: `device_tag=pixel-10-pro-fold`, `runs_dir=runs/phone-lab-runs/pixel-10-pro-fold`, `Inner Display` (logical 0, ON) and `Outer Display` (logical 3, OFF) | `RUN/xl-state.json`, `RUN/fold-state.json` |
+| Freeze lands under its own device dir | XL `pixel-10-pro-xl/20260927/freeze-163346.{png,json}` (1 panel, manifest `device.device_tag=pixel-10-pro-xl`, status bar cropped 161 px, PNG 463 253 bytes). Fold `pixel-10-pro-fold/20260927/freeze-163401.{png,json}` (2 panels, `device_tag=pixel-10-pro-fold`, inner cropped 160 px, outer is an OFF placeholder, PNG 1 091 787 bytes) | `RUN/xl-freeze.json`, `RUN/fold-freeze.json`, `RUN/freeze-manifests.txt` |
+| Second viewer for the same device on another port | Second `serve --model "Pixel 10 Pro XL" --port 0` bound `60909` and printed `another viewer for pixel-10-pro-xl is running: http://127.0.0.1:60877/ (pid …, heartbeat 5 s ago)`; the first XL viewer's `/api/state.viewers` then listed `{url: http://127.0.0.1:60909/, heartbeat_age_s: 2.7}` | `RUN/xl-viewer-2.log`, `RUN/xl-viewers-after.txt` |
+| Bare `python3 -m phonelab inventory` with two phones | exit 2, `error: 2 authorized physical devices attached: Pixel 10 Pro Fold (physical), Pixel 10 Pro XL (physical); pass --serial, --model, or set ANDROID_SERIAL` (models only) | `RUN/bare-inventory.txt` |
+| Registry isolation | Synthetic tagged records `synth-xl-0001` and `synth-fold-0001` written to each device dir with `display_id 0`; `Registry(root, "pixel-10-pro-xl").load_all()` returns only `synth-xl-0001`, the Fold registry only `synth-fold-0001`. `/api/state` joins sessions to agent displays only (`capture.py` `state()`), and neither phone had a Cua display live during the run, so both viewers reported no session on any display; the join path is the same `Registry.load_all` shown above | `RUN/registry-isolation.txt` |
+| No serial anywhere | `RUN/serial-scan.sh` reads both serials from `adb devices -l` without echoing them and greps the whole checkout including `runs/`: 0 files for each | `RUN/serial-scan.txt` |
+
+Two viewers on the same port were not tried (the first run already proved
+`PortInUse` in `tests/test_server_port.py`); `--port 0` was used throughout
+so the slice-5 session's viewer on 8791 was never touched.
+
+### Agent-only freeze on a real device (2026-09-27 16:42)
+
+A second read-only Fold viewer (port 63092, 12 s) still showed no Cua
+display (`RUN/fold-state-3.json`), so a device-backed image with content
+is still open. The endpoint itself was exercised on the Pixel 10 Pro XL
+(viewer port 63168, `RUN/xl-agent-freeze-device.txt`):
+
+- `POST /api/freeze?panels=agent` → `freeze-agent-164221.{png,json}` under
+  `pixel-10-pro-xl/20260927/`, `panels: 0`, `panels_included: "agent"`,
+  manifest `device.device_tag=pixel-10-pro-xl`, `panels: []`, PNG 472x1262
+  (empty canvas, no human pixels).
+- `POST /api/freeze?panels=bogus` → HTTP 400 `{"error": "panels must be agent or all"}`.
+- `GET /api/freezes` lists the agent freeze newest first next to the
+  all-panels freeze from 16:33 (`panels_included` absent on the older manifest).
+- Serial scan repeated afterwards: 0 files for either serial.
+
+### Agent-only freeze from a live Cua display on the XL (2026-09-27 16:48)
+
+Bobby approved deploying the current Cua runtime to the Pixel 10 Pro XL
+("deploy on the XL"). The XL already had `ai.cua.driver.runtime`, the
+fixture, and the demo installed from 2026-09-18, but `cua-driver doctor`
+returned `invalid Android response JSON` against the 2026-09-26 host
+driver. `scripts/deploy.py` from `~/Developer/worktrees/cua-bobby-jellyware`
+reinstalled the three debug APKs and restarted the runtime; `doctor` then
+returned `status: ok` (`RUN/xl-cua-deploy.txt`, serial masked).
+
+Then, on the XL only: `serve --model "Pixel 10 Pro XL" --port 0 --driver …`
+(port 64437) plus `cua demo --no-taps --duration 90` (session `dc6548c0`,
+fixture launched on logical display 5, clean stop after 7 s,
+`RUN/xl-cua-demo.log`):
+
+- `/api/state` showed `Cua agent` (logical 5, ON, agent, 1.5 fps) with the
+  registry session `phone-lab demo`, `device_tag=pixel-10-pro-xl`, active.
+- `POST /api/freeze?panels=agent` → `pixel-10-pro-xl/20260927/freeze-agent-164823.{png,json}`,
+  `panels: 1`, `panels_included: agent`; manifest panel `Cua agent`, role
+  agent, 1080x1920, session package `ai.cua.fixture.notes`; PNG 610x1262
+  showing only the Synthetic Notes Fixture (title band, panel, footer).
+  Preview copy: `RUN/freeze-agent-164823-preview.png`.
+- `POST /api/freeze` at the same second → `freeze-164823.{png,json}` with
+  `panels: 2` (human plus agent), the ordinary non-publishable freeze.
+- Serial scan afterwards: 0 files for either serial (`RUN/serial-scan.txt`).
+
+This is the first freeze in the repo that can go to
+`saari-co/public-oss-proof-assets` as-is; the route is in
+`docs/publishing-proof-images.md`. Bobby copies it there.
