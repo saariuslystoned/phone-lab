@@ -121,3 +121,19 @@ was empty at the end.
 Two viewers on the same port were not tried (the first run already proved
 `PortInUse` in `tests/test_server_port.py`); `--port 0` was used throughout
 so the slice-5 session's viewer on 8791 was never touched.
+
+### Agent-only freeze on a real device (2026-09-27 16:42)
+
+A second read-only Fold viewer (port 63092, 12 s) still showed no Cua
+display (`RUN/fold-state-3.json`), so a device-backed image with content
+is still open. The endpoint itself was exercised on the Pixel 10 Pro XL
+(viewer port 63168, `RUN/xl-agent-freeze-device.txt`):
+
+- `POST /api/freeze?panels=agent` → `freeze-agent-164221.{png,json}` under
+  `pixel-10-pro-xl/20260927/`, `panels: 0`, `panels_included: "agent"`,
+  manifest `device.device_tag=pixel-10-pro-xl`, `panels: []`, PNG 472x1262
+  (empty canvas, no human pixels).
+- `POST /api/freeze?panels=bogus` → HTTP 400 `{"error": "panels must be agent or all"}`.
+- `GET /api/freezes` lists the agent freeze newest first next to the
+  all-panels freeze from 16:33 (`panels_included` absent on the older manifest).
+- Serial scan repeated afterwards: 0 files for either serial.
