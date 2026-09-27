@@ -21,9 +21,10 @@ device proof yet or the proof missed its target), `planned`.
 
 | Feature | Modules / endpoints | Automated tests | Device proof | Status |
 |---|---|---|---|---|
-| Accessibility tree of any display as `GET /api/tree/<logical_id>` | new `phonelab/tree.py` (shell-UID UiAutomation, `getWindowsOnAllDisplays`), `phonelab/server.py` | tree parser tests on captured XML | `runs/phone-lab-runs/<run>/tree-*.json` | planned |
-| Stable short refs per element, overlay in the viewer | `phonelab/refs.py`, `phonelab/ui/index.html` | ref stability tests over ten captures | fixture increment ref identical across ten captures and a toast | planned |
-| Tap by ref on a Cua display while a human types on display 0 | `phonelab/cua.py` (`tap`), `phonelab/refs.py` | — | `runs/phone-lab-runs/<run>/concurrent-*.json` | planned |
+| Accessibility tree of any display as `GET /api/tree/<logical_id>` (shell-UID UiAutomation under `app_process`, `getWindowsOnAllDisplays`, connected without suppressing the human's services; text and window titles redacted outside the two Cua apps) | `tools/treedump/` (Java, built by `build.sh`), `phonelab/tree.py` `TreeDumper`, `phonelab/server.py` `GET /api/tree/<id>`, `python3 -m phonelab tree <id>` | `tests/test_tree.py` (fake adb speaking the protocol, restart-once), `tests/test_server_tree.py` | `runs/phone-lab-runs/slice-2-20260927/tree-display0-smoke.json` (342 nodes, 0 text leaks, 43–127 ms), `tree-cap*.json` on the Cua display (10–14 ms) | proven |
+| Stable short refs per element, overlay in the viewer | `phonelab/refs.py` (`ref_key`, `make_ref`, `assign_refs`, `find`), `phonelab/ui/index.html` refs toggle and chips | `tests/test_refs.py` (11), `tests/test_refs_captured.py` (ref from a captured tree equals the proven one) | `ref-stability.json` and `concurrent-taps*.json`: increment ref `e7f67h` identical across 10 captures plus a toast capture, counter text changing; `viewer-page.txt` | proven |
+| Tap by ref on a Cua display while a human types on display 0 | `phonelab/server.py` `POST /api/tap` (agent displays only, registry session, cua-driver snapshot+tap, stale retry) | `tests/test_server_tree.py` (refusals, snapshot then tap at the centre, registry `tap ref`) | `concurrent-taps-run2.json`: 10/10 `ok`, counter +10, 9 of 10 taps during 10.4 s of `input -d 0 text`, typed text intact, human focus kept | proven |
+| Transient windows on the agent display (`POST /api/tree/<id>/act` toast, focus, click) | `tools/treedump/` `toast`/`act`, `phonelab/server.py` | `tests/test_server_tree.py` (act focus resolves the node index) | `toast-api-cua-display-run2.png` (toast visible on the Cua display; tree and ref unchanged) | proven |
 
 ## Slice 3 — Trails: record and replay
 
@@ -73,6 +74,16 @@ that reviewers can see where new code should land.
   SurfaceFlinger id (uniqueId and logical id stay). Capture threads follow
   uniqueId, so one transient "screencap returned no PNG" per snapshot is
   expected and the sequence continues.
+- **Toast windows are invisible to the tree.** A toast is drawn on the
+  display but is not an accessibility window, so `/api/tree` lists the
+  same windows during a toast; the proof shows it with a screencap.
+- **Demo owns its registry record.** `POST /api/tap` writes `last_action =
+  tap ref`, but a running `cua demo` rewrites the record every 2 s from its
+  own copy, so the viewer strip shows the demo's last action again within
+  2 s. Slice 3's recorder should own the session instead.
+- **Fold posture moves logical ids.** Logical 0 is the active panel (inner
+  when open, cover when closed; the other is OFF under id 3 or 1). Trees
+  and refs are per logical id, so a posture change is a new display.
 - **Shared machine.** Emulators (`emulator-*` serials) are ignored unless
   selected with `--serial` or allowed with `--allow-emulators`; with several
   phones attached, pick one with `--serial`, `--model`, or `ANDROID_SERIAL`.

@@ -99,6 +99,11 @@ def main(argv: list[str] | None = None) -> int:
             dumper.stop()
     if args.command == "serve":
         from .server import serve
+
+        def _terminate(signum, frame):  # `kill <pid>` must stop the device-side treedump process too
+            raise KeyboardInterrupt
+
+        signal.signal(signal.SIGTERM, _terminate)
         jar = _resolve_treedump_jar(args.treedump_jar)
         driver = Path(args.driver) if args.driver else None
         serve(adb, Registry(runs_dir), args.host, args.port, runs_dir, args.max_height,

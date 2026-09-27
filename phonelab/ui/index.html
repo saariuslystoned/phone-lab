@@ -45,12 +45,12 @@
 <body>
 <header>
   <h1>phone-lab</h1>
-  <span id=\"device\" class=\"muted\">connecting…</span>
-  <span id=\"dot\" class=\"dot\" title=\"green: /api/state answered within 3 s\"></span>
-  <button id=\"freeze\">Freeze frame</button>
-  <span id=\"toast\"></span>
+  <span id="device" class="muted">connecting…</span>
+  <span id="dot" class="dot" title="green: /api/state answered within 3 s"></span>
+  <button id="freeze">Freeze frame</button>
+  <span id="toast"></span>
 </header>
-<main id=\"panels\"><div class=\"empty\">waiting for /api/state…</div></main>
+<main id="panels"><div class="empty">waiting for /api/state…</div></main>
 <script>
 (() => {
   const panels = new Map();          // unique_id (stable across Cua surface swaps) -> panel record
