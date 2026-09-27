@@ -68,11 +68,12 @@ threshold silently.
 ```bash
 python3 skills/phone-lab-verify/scripts/verify.py --base-url http://127.0.0.1:8791 \
   --duration 120 --interval 5 --min-fps 0.8 --min-ok-taps 10 \
-  --runs-dir runs/phone-lab-runs/<device-tag> [--serial S] [--skip-freeze] [--no-require-agent]
+  [--runs-dir runs/phone-lab-runs/<device-tag>] [--serial S] [--skip-freeze] [--no-require-agent]
 ```
 
-`--runs-dir` is the device directory the viewer banner prints (the runs
-root plus the device tag), not the runs root.
+`--runs-dir` is optional: by default the script reads `runs_dir` from
+`/api/state`, which is the device directory the viewer banner prints (the
+runs root plus the device tag). Pass it only to override that.
 
 Exit 0 = pass, 1 = fail, 2 = setup problem (server unreachable, serial
 ambiguous). Emulators are ignored unless `--allow-emulators`; with several

@@ -1,19 +1,26 @@
 """Tests for slice 4: trace viewer index, loaders, safety, server, and generator."""
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import http.client
 import inspect
+import io
 import json
 import tempfile
 import threading
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
+import phonelab.trace
+from phonelab.server import ViewerHandler
 from phonelab.trace import (
     RUN_SCHEMA,
     STEP_SCHEMA,
+    ResponseMixin,
     TraceError,
+    TraceHandler,
     TraceServer,
     list_runs,
     load_run,
@@ -200,6 +207,33 @@ class TraceServerTests(unittest.TestCase):
         status, headers, _ = self._get("/")
         self.assertEqual(status, 302)
         self.assertEqual(headers.get("location"), "/trace")
+
+    def test_response_mixin_and_headers(self):
+        self.assertTrue(issubclass(ViewerHandler, ResponseMixin))
+        self.assertTrue(issubclass(TraceHandler, ResponseMixin))
+        self.assertFalse(hasattr(phonelab.trace, "_send_resp"))
+        self.assertFalse(hasattr(phonelab.trace, "_send_json"))
+
+        status, headers, body = self._get("/api/runs")
+        self.assertEqual(status, 200)
+        self.assertEqual(headers.get("cache-control"), "no-store")
+        self.assertEqual(headers.get("content-type"), "application/json")
+        self.assertEqual(headers.get("content-length"), str(len(body)))
+
+    def test_internal_error_sanitization_and_logging(self):
+        buf = io.StringIO()
+        with patch("phonelab.trace.list_runs", side_effect=RuntimeError("/secret/abs/path")):
+            with contextlib.redirect_stdout(buf):
+                status, _, body = self._get("/api/runs")
+
+        self.assertEqual(status, 500)
+        self.assertEqual(body, b'{"error": "internal error"}')
+        self.assertEqual(json.loads(body.decode()), {"error": "internal error"})
+        self.assertNotIn("/secret/abs/path", body.decode())
+
+        logged = buf.getvalue()
+        self.assertIn("/secret/abs/path", logged)
+        self.assertIn("trace error on /api/runs", logged)
 
 
 class SynthRunRoundTripTests(unittest.TestCase):
