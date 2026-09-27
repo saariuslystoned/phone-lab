@@ -38,16 +38,24 @@ Run it (Python 3.12 plus Pillow, one authorized device on USB):
 python3 -m unittest discover -s tests -v
 python3 -m phonelab inventory
 python3 -m phonelab serve                      # http://127.0.0.1:8791/
+python3 -m phonelab serve --port 0             # a free port; the URL is printed
 python3 -m phonelab cua demo --driver /path/to/cua-driver --duration 300 --tap-every 8
 sh tools/treedump/build.sh                      # needs the Android SDK (javac, d8)
 python3 -m phonelab tree 0                      # element tree of logical display 0, with refs
 python3 -m phonelab serve --driver /path/to/cua-driver   # adds /api/tree, /api/tap and the refs overlay
 ```
 
-Other agents' emulators and phones can share the machine: phone-lab never
-picks an `emulator-*` device on its own, and with several phones attached
-it asks you to choose with `--serial S`, `--model "Pixel 10 Pro Fold"`, or
-`ANDROID_SERIAL`. Errors name models, never serials.
+Other agents' emulators, phones, and phone-lab instances can share the
+machine: phone-lab never picks an `emulator-*` device on its own, and with
+several phones attached it asks you to choose with `--serial S`,
+`--model "Pixel 10 Pro Fold"`, or `ANDROID_SERIAL`. Errors name models,
+never serials. A busy port fails fast and names the port; `--port 0` picks
+a free one. Everything an instance writes goes under
+`runs/phone-lab-runs/<device-tag>/` (the tag comes from the model name,
+for example `pixel-10-pro-fold`; override with `--device-tag`), so
+sessions and freezes of different phones never mix. A second viewer for
+the same device is reported in the banner and in `/api/state.viewers`,
+not refused. See [plans/shared-machine-instances.md](plans/shared-machine-instances.md).
 
 - [docs/adr-001-tech-stack.md](docs/adr-001-tech-stack.md) — the stack decision
 - [docs/feature-map.md](docs/feature-map.md) — features, modules, tests, proof, status

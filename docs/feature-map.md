@@ -37,7 +37,9 @@ device proof yet or the proof missed its target), `planned`.
 
 | Feature | Modules / endpoints | Automated tests | Device proof | Status |
 |---|---|---|---|---|
-| Static page over a run directory: per-step screenshots, tree, action, result, timings | `phonelab/ui/trace.html`, `GET /trace/<run>` in `phonelab/server.py` | — | open a slice-3 run and diff two runs | planned |
+| Run-directory format that trails write and the viewer reads (`run.json`, `steps/NNN/step.json`, per-display PNGs with freeze-manifest fields, `phone-lab.tree.v1`) | `docs/trace-format.md`; `tests/synth_run.py` generates a conforming run without a device | `tests/test_trace.py` (generator round-trip: sha256 per file, files exist, steps summary) | waits for slice 3 to write a real run on the Fold | implemented |
+| Trace page over a run directory: run picker, timeline, per-step before/after screenshots of every display, action, predicate, result, timings bar, lazy element tree with the acted ref highlighted | `phonelab/trace.py` (`list_runs`, `load_run`, `load_step`, `safe_file`, `handle_get`); `phonelab/ui/trace.html`; `GET /trace`, `GET /api/runs`, `GET /api/runs/<run>`, `GET /api/runs/<run>/steps/<n>`, `GET /runs/<run>/<file>` mounted in the live `ViewerHandler` and in the device-free `python3 -m phonelab trace` server (port 8792) | `tests/test_trace.py` (index, loaders, path safety, HTTP routes on port 0) | open a slice-3 run on the Fold | implemented, not proven |
+| Diff two runs side by side: aligned timeline, per-display screen same/differs from `png_sha256`, action and result equality, duration delta, tree refs added/removed | `phonelab/ui/trace.html` (client-side diff from two `step.json` documents) | none (vanilla page); checked by the cockpit on synthetic runs | diff two slice-3 replays | implemented, not proven |
 
 ## Slice 5 — Self-heal
 
@@ -87,5 +89,12 @@ that reviewers can see where new code should land.
 - **Shared machine.** Emulators (`emulator-*` serials) are ignored unless
   selected with `--serial` or allowed with `--allow-emulators`; with several
   phones attached, pick one with `--serial`, `--model`, or `ANDROID_SERIAL`.
-  Two phone-lab instances on one machine still need distinct `--port` and
-  `--runs-dir` values (not enforced yet).
+  A busy port fails fast (`--port 0` picks a free one); runs and the
+  session registry live under `runs/phone-lab-runs/<device-tag>/`, where the
+  tag is derived from the model name; a second viewer for the same device
+  is reported (banner, `/api/state.viewers`), not refused. Still open: two
+  phones of the same model share a tag unless one passes `--device-tag`;
+  legacy untagged records in the flat `sessions/` directory are read by
+  every device's viewer; presence is advisory, so two viewers that both
+  freeze still write into the same day directory (names never collide).
+  Spec: `plans/shared-machine-instances.md`.

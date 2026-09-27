@@ -55,6 +55,9 @@ Spec: [slice-2-element-refs.md](slice-2-element-refs.md).
   every display, element tree, action, result, timings.
 - Prove: open a slice-3 run, step through it, diff two runs side by side.
 
+Format the viewer reads and slice 3 writes: [docs/trace-format.md](../docs/trace-format.md).
+Spec: [slice-4-trace-viewer.md](slice-4-trace-viewer.md).
+
 ## Slice 5 — Self-heal
 
 - On replay, when a ref is missing, search the current tree for the nearest

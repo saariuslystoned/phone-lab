@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
@@ -38,6 +39,11 @@ def normalize_model(name: str) -> str:
     return name.replace("_", " ").strip().casefold()
 
 
+def device_tag(model: str) -> str:
+    cleaned = re.sub(r"[^a-z0-9]+", "-", model.casefold()).strip("-")
+    return cleaned or "unknown"
+
+
 def describe(devices: list[dict[str, str]]) -> str:
     """Models and kinds only; never a serial."""
     return ", ".join(f"{d['model']} ({d['kind']})" for d in devices) or "none"
@@ -57,6 +63,7 @@ class Adb:
         self.wanted_model = model
         self.allow_emulators = allow_emulators
         self.model = "unknown"
+        self.tag = "unknown"
         self.kind: str | None = None
 
     def redact(self, text: str) -> str:
@@ -99,6 +106,7 @@ class Adb:
                                "pass --serial, --model, or set ANDROID_SERIAL")
             chosen = pool[0]
         self.serial, self.model, self.kind = chosen["serial"], chosen["model"], chosen["kind"]
+        self.tag = device_tag(self.model)
         return self
 
     def shell(self, *args: str, timeout: float = 15) -> str:

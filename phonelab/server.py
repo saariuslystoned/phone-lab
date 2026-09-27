@@ -2,21 +2,26 @@
 from __future__ import annotations
 
 import datetime as dt
+import errno
 import hashlib
 import io
 import json
 import re
+import sys
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import Any
 from urllib.parse import unquote, urlsplit
 
 from PIL import Image, ImageDraw, ImageFont
 
+from . import trace
 from .adb import Adb
 from .capture import CaptureManager, Frame
 from .cua import CuaDriver, CuaError
 from .displays import Display
+from .presence import ViewerPresence
 from .refs import assign_refs, find, tap_point
 from .sessions import Registry
 from .tree import TreeDumper, TreeError
@@ -33,6 +38,10 @@ TEXT = (235, 235, 240)
 MUTED = (170, 170, 180)
 GREY = (140, 140, 150)
 BLUE = (90, 160, 255)
+
+
+class PortInUse(OSError):
+    """`host:port` already has a listener. The message names the port."""
 
 
 def _iso(now: float) -> str:
@@ -161,20 +170,50 @@ def recent_freezes(runs_dir: Path, limit: int = 10) -> list[dict]:
     return out
 
 
+def bind_viewer(host: str = "127.0.0.1", port: int = 8791, adb: Any = None,
+                manager: Any = None, device: dict | None = None,
+                runs_dir: Path | str = Path("runs/phone-lab-runs")) -> ViewerServer:
+    """Bind the viewer socket before anything touches the device; port 0 picks a free port."""
+    try:
+        return ViewerServer((host, port), adb=adb, manager=manager, device=device, runs_dir=Path(runs_dir))
+    except OSError as exc:
+        if exc.errno == errno.EADDRINUSE:
+            raise PortInUse(
+                f"port {port} on {host} is already in use (another phone-lab viewer or another agent's server?); "
+                f"pass --port 0 to pick a free port or --port N for another one"
+            ) from exc
+        raise
+
+
+def viewer_url(server: ViewerServer) -> str:
+    """The URL with the port actually bound (matters for `--port 0`)."""
+    host, real_port = server.server_address[:2]
+    return f"http://{host}:{real_port}/"
+
+
 class ViewerServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
+    presence: ViewerPresence | None = None
 
-    def __init__(self, address: tuple[str, int], adb: Adb, manager: CaptureManager, device: dict, runs_dir: Path,
+    def __init__(self, address: tuple[str, int], adb: Any = None, manager: Any = None,
+                 device: dict | None = None, runs_dir: Path | str = Path("runs/phone-lab-runs"),
+                 presence: ViewerPresence | None = None,
                  dumper: TreeDumper | None = None, driver: CuaDriver | None = None) -> None:
         super().__init__(address, ViewerHandler)
         self.adb = adb
         self.manager = manager
-        self.device = device
+        self.device = device or {}
         self.runs_dir = Path(runs_dir)
+        self.presence = presence
         self.dumper = dumper
         self.driver = driver
         self.trees: dict[int, dict] = {}
+
+    def service_actions(self) -> None:
+        super().service_actions()
+        if self.presence is not None:
+            self.presence.beat()
 
 
 class ViewerHandler(BaseHTTPRequestHandler):
@@ -202,15 +241,17 @@ class ViewerHandler(BaseHTTPRequestHandler):
         if path == "/":
             self._send(200, UI_PATH.read_bytes(), "text/html; charset=utf-8")
         elif path == "/api/state":
-            state = self.server.manager.state()
+            state = self.server.manager.state() if self.server.manager else {}
+            viewers = self.server.presence.others() if self.server.presence else []
+            dumper = self.server.dumper
             tree_info = {
-                "available": self.server.dumper is not None,
-                "hello": getattr(self.server.dumper, "hello", None) if self.server.dumper else None,
-                "restarts": getattr(self.server.dumper, "restarts", 0) if self.server.dumper else 0,
-                "last_error": getattr(self.server.dumper, "last_error", None) if self.server.dumper else None,
+                "available": dumper is not None,
+                "hello": getattr(dumper, "hello", None) if dumper else None,
+                "restarts": getattr(dumper, "restarts", 0) if dumper else 0,
+                "last_error": getattr(dumper, "last_error", None) if dumper else None,
             }
             self._json({"device": self.server.device, "server_time": time.time(),
-                        "runs_dir": str(self.server.runs_dir), "tree": tree_info, **state})
+                        "runs_dir": str(self.server.runs_dir), "viewers": viewers, "tree": tree_info, **state})
         elif path == "/api/freezes":
             self._json(recent_freezes(self.server.runs_dir))
         elif path.startswith("/api/tree/"):
@@ -239,11 +280,13 @@ class ViewerHandler(BaseHTTPRequestHandler):
                 extra["X-Tree-Cost-Ms"] = str(reply["cost_ms"])
             self._json(reply, 200, extra=extra)
         elif path.startswith("/frame/") and path.endswith(".jpg"):
-            frame = self.server.manager.frame(unquote(path[len("/frame/"):-len(".jpg")]))
+            frame = self.server.manager.frame(unquote(path[len("/frame/"):-len(".jpg")])) if self.server.manager else None
             if frame is None:
                 self._json({"error": "no frame yet"}, 404)
             else:
                 self._send(200, frame.jpeg, "image/jpeg", {"X-Frame-Seq": str(frame.seq)})
+        elif trace.handle_get(self, self.server.runs_dir, path):
+            pass
         else:
             self._json({"error": "not found"}, 404)
 
@@ -437,34 +480,58 @@ class ViewerHandler(BaseHTTPRequestHandler):
 
 def serve(adb: Adb, registry: Registry, host: str = "127.0.0.1", port: int = 8791,
           runs_dir: Path = Path("runs/phone-lab-runs"), max_height: int = 1000,
-          driver: Path | None = None, treedump_jar: Path | None = None) -> None:
+          driver: Path | None = None, treedump_jar: Path | None = None) -> int:
     """Run the viewer until Ctrl-C; capture threads start immediately."""
-    device = {"model": adb.model, **adb.props()}
-    manager = CaptureManager(adb, registry, max_height=max_height)
-    manager.start()
-    dumper: TreeDumper | None = None
-    if treedump_jar is not None:
-        try:
-            d = TreeDumper(adb, Path(treedump_jar))
-            hello = d.start()
-            print(adb.redact(json.dumps(hello)), flush=True)
-            dumper = d
-        except TreeError as exc:
-            print(adb.redact(f"treedump start failed: {exc}"), flush=True)
-            dumper = None
-    cua_driver = CuaDriver(adb, Path(driver)) if driver is not None else None
-    server = ViewerServer((host, port), adb, manager, device, Path(runs_dir), dumper=dumper, driver=cua_driver)
-    print(f"phone-lab viewer on http://{host}:{port}/ · {device['model']} · Android {device['android_release']} · runs {runs_dir}", flush=True)
+    runs_dir = Path(runs_dir)
     try:
-        server.serve_forever(poll_interval=0.5)
-    except KeyboardInterrupt:
-        pass
-    finally:
-        server.server_close()
-        manager.stop()
-        if dumper is not None:
+        server = bind_viewer(host, port, adb=adb, runs_dir=runs_dir)
+    except PortInUse as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    manager: CaptureManager | None = None
+    presence: ViewerPresence | None = None
+    try:
+        device_tag = getattr(adb, "tag", "unknown")
+        device = {"model": adb.model, "device_tag": device_tag, **adb.props()}
+        server.device = device
+
+        manager = CaptureManager(adb, registry, max_height=max_height)
+        server.manager = manager
+        manager.start()
+
+        if treedump_jar is not None:
             try:
-                dumper.stop()
+                dumper = TreeDumper(adb, Path(treedump_jar))
+                print(adb.redact(json.dumps(dumper.start())), flush=True)
+                server.dumper = dumper
+            except TreeError as exc:
+                print(adb.redact(f"treedump start failed: {exc}"), flush=True)
+        server.driver = CuaDriver(adb, Path(driver)) if driver is not None else None
+
+        real_port = server.server_address[1]
+        presence = ViewerPresence(runs_dir, host=host, port=real_port, device_tag=device_tag)
+        server.presence = presence
+        presence.start()
+
+        for other in presence.others():
+            age = int(round(other.get("heartbeat_age_s", 0)))
+            print(f"another viewer for {device_tag} is running: {other['url']} (pid {other['pid']}, heartbeat {age} s ago)", flush=True)
+        print(f"phone-lab viewer on {viewer_url(server)} · {device['model']} · Android {device['android_release']} · runs {runs_dir}", flush=True)
+
+        server.serve_forever(poll_interval=0.5)
+        return 0
+    except KeyboardInterrupt:
+        return 0
+    finally:
+        if presence is not None:
+            presence.stop()
+        server.server_close()
+        if manager is not None:
+            manager.stop()
+        if server.dumper is not None:
+            try:
+                server.dumper.stop()
             except Exception:
                 pass
         print("phone-lab viewer stopped", flush=True)
