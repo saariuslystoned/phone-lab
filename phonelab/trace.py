@@ -274,7 +274,8 @@ def serve_trace(host: str = "127.0.0.1", port: int = 8792,
                 runs_dir: Path = Path("runs/phone-lab-runs")) -> None:
     """Run the trace viewer server until Ctrl-C."""
     server = TraceServer((host, port), Path(runs_dir))
-    print(f"phone-lab trace on http://{host}:{port}/trace · runs {runs_dir}", flush=True)
+    real_port = server.server_address[1]  # matters for --port 0
+    print(f"phone-lab trace on http://{host}:{real_port}/trace · runs {runs_dir}", flush=True)
     try:
         server.serve_forever(poll_interval=0.5)
     except KeyboardInterrupt:
