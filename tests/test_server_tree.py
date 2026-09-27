@@ -94,6 +94,8 @@ class FakeDumper:
                 "windows": [],
                 "nodes": [],
             }
+        if logical_id == 8:  # a non-ok reply whose error field is present but null
+            return {"ok": False, "error": None, "display_id": 8, "windows": [], "nodes": []}
         return {
             "ok": False,
             "error": f"no windows on display {logical_id}",
@@ -199,6 +201,11 @@ class ServerTreeTests(unittest.TestCase):
         status, data, _ = _request_json(f"http://127.0.0.1:{self.port}/api/tree/7")
         self.assertEqual(status, 404)
         self.assertFalse(data.get("ok", True))
+
+    def test_tree_null_error_still_404(self) -> None:
+        status, data, _ = _request_json(f"http://127.0.0.1:{self.port}/api/tree/8")
+        self.assertEqual(status, 404)
+        self.assertEqual(data.get("error"), "display has no windows")
 
     def test_tree_503_without_dumper(self) -> None:
         self.server.dumper = None

@@ -269,7 +269,7 @@ class ViewerHandler(BaseHTTPRequestHandler):
                 self._json({"error": self.server.adb.redact(str(exc))}, 503)
                 return
             if not reply.get("ok"):
-                self._json({"ok": False, "error": self.server.adb.redact(reply.get("error", "display has no windows"))}, 404)
+                self._json({"ok": False, "error": self.server.adb.redact(str(reply.get("error") or "display has no windows"))}, 404)
                 return
             assign_refs(reply)
             displays = self.server.manager.state().get("displays", [])
