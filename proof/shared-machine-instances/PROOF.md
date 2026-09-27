@@ -137,3 +137,33 @@ is still open. The endpoint itself was exercised on the Pixel 10 Pro XL
 - `GET /api/freezes` lists the agent freeze newest first next to the
   all-panels freeze from 16:33 (`panels_included` absent on the older manifest).
 - Serial scan repeated afterwards: 0 files for either serial.
+
+### Agent-only freeze from a live Cua display on the XL (2026-09-27 16:48)
+
+Bobby approved deploying the current Cua runtime to the Pixel 10 Pro XL
+("deploy on the XL"). The XL already had `ai.cua.driver.runtime`, the
+fixture, and the demo installed from 2026-09-18, but `cua-driver doctor`
+returned `invalid Android response JSON` against the 2026-09-26 host
+driver. `scripts/deploy.py` from `~/Developer/worktrees/cua-bobby-jellyware`
+reinstalled the three debug APKs and restarted the runtime; `doctor` then
+returned `status: ok` (`RUN/xl-cua-deploy.txt`, serial masked).
+
+Then, on the XL only: `serve --model "Pixel 10 Pro XL" --port 0 --driver …`
+(port 64437) plus `cua demo --no-taps --duration 90` (session `dc6548c0`,
+fixture launched on logical display 5, clean stop after 7 s,
+`RUN/xl-cua-demo.log`):
+
+- `/api/state` showed `Cua agent` (logical 5, ON, agent, 1.5 fps) with the
+  registry session `phone-lab demo`, `device_tag=pixel-10-pro-xl`, active.
+- `POST /api/freeze?panels=agent` → `pixel-10-pro-xl/20260927/freeze-agent-164823.{png,json}`,
+  `panels: 1`, `panels_included: agent`; manifest panel `Cua agent`, role
+  agent, 1080x1920, session package `ai.cua.fixture.notes`; PNG 610x1262
+  showing only the Synthetic Notes Fixture (title band, panel, footer).
+  Preview copy: `RUN/freeze-agent-164823-preview.png`.
+- `POST /api/freeze` at the same second → `freeze-164823.{png,json}` with
+  `panels: 2` (human plus agent), the ordinary non-publishable freeze.
+- Serial scan afterwards: 0 files for either serial (`RUN/serial-scan.txt`).
+
+This is the first freeze in the repo that can go to
+`saari-co/public-oss-proof-assets` as-is; the route is in
+`docs/publishing-proof-images.md`. Bobby copies it there.
