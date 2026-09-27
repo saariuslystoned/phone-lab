@@ -16,6 +16,7 @@ from urllib.parse import unquote, urlsplit
 
 from PIL import Image, ImageDraw, ImageFont
 
+from . import trace
 from .adb import Adb
 from .capture import CaptureManager, Frame
 from .displays import Display
@@ -245,6 +246,8 @@ class ViewerHandler(BaseHTTPRequestHandler):
                 self._json({"error": "no frame yet"}, 404)
             else:
                 self._send(200, frame.jpeg, "image/jpeg", {"X-Frame-Seq": str(frame.seq)})
+        elif trace.handle_get(self, self.server.runs_dir, path):
+            pass
         else:
             self._json({"error": "not found"}, 404)
 
