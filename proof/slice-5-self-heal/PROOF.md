@@ -10,8 +10,8 @@ session and the XL was not needed. Raw evidence is git-ignored under
 
 Implemented (core), not proven on a device. `phonelab/heal.py` is the pure
 candidate search the roadmap asks for; the trail-side contract that slice
-3's replay will call (`--max-heal-px`, `result.detail.healed`,
-`trees.heal`) is written in `plans/slice-5-self-heal.md`. **Integration and
+3's replay will call (`--max-heal-px`, `result.detail.heal`,
+`trees.heal`, hook `replay.Runner.run_step` per the slice-3 cockpit) is written in `plans/slice-5-self-heal.md`. **Integration and
 device proof wait for slice 3**: the roadmap's "one healed replay and one
 loud failure on the Fold" needs replay to exist first.
 

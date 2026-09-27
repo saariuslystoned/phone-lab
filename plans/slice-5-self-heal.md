@@ -1,9 +1,8 @@
 # Slice 5 — Self-heal (spec, core)
 
 Date: 2026-09-27. Builds on slice-2 refs (`phonelab/refs.py`) and the
-step shape in `docs/trace-format.md`. Slice 3 (trails, replay) is built in
-parallel and is not on `main` yet; this slice defines the contract replay
-will call and proves it on captured tree fixtures only. Device proof (one
+step shape in `docs/trace-format.md`. Slice 3 (trails, replay, PR 6) is built in
+parallel; this slice defines the contract its replay will call and proves it on captured tree fixtures only. Device proof (one
 healed replay and one loud failure on the Fold) waits for slice 3.
 
 ## Problem
@@ -154,12 +153,18 @@ the two dicts by reference. Replay writes them next to the step as
 whenever heal ran, healed or not, so a failure always ships both captures
 (the screenshots are already in `captures.before`).
 
-## Trail-side contract (for slice 3)
+## Trail-side contract (integration into slice 3's replay)
 
-Replay, per step with `action.ref`:
+Slice 3 (PR 6, `phonelab/replay.py`) resolves a `tap` or `set_text` ref in
+`Runner.run_step` with `refs.find(tree_before, ref)` and, when that is
+`None`, writes status `fail` with message `ref <ref> not found in tree
+(N refs)`. That branch is the hook point. The integration slice (after
+PR 5 and PR 6 are both on `main`) changes it to:
 
-1. `node = refs.find(current_tree, ref)`; if found, act normally.
-2. Else `res = heal(ref, recorded_tree, current_tree, max_distance_px=args.max_heal_px)`.
+1. `node = refs.find(tree_before, ref)`; if found, act normally.
+2. Else `res = heal(ref, recorded_tree, tree_before, max_distance_px=args.max_heal_px)`,
+   where `recorded_tree` is the tree from the trail's source run (or the
+   step's recorded tree when the trail carries one).
 3. `res.status == "healed"`: act on `res.node` (tap at
    `refs.tap_point(res.node)`), and write the step result as
 
@@ -167,19 +172,20 @@ Replay, per step with `action.ref`:
 "result": {
   "status": "healed",
   "message": "ref e7f67h healed: moved 60 px",
-  "detail": {"healed": <the note>, "counter_before": 2, "counter_after": 3, ...}
+  "detail": {"heal": <the note>, "counter_before": 2, "counter_after": 3, ...}
 }
 ```
 
-   `action.ref` stays the recorded ref; `action.detail.ref_used` carries
-   the healed ref and `action.detail.x/y` the tap point actually used.
-4. `res.status == "failed"`: do not act. Write
+   `RunWriter.finish` already counts `healed` as ok. `action.ref` stays
+   the recorded ref; `action.detail.ref_used` carries the healed ref and
+   `action.detail.x/y` the tap point actually used.
+4. `res.status == "failed"`: do not act. Keep status `fail`, and write
 
 ```json
 "result": {
   "status": "fail",
   "message": "ref e7f67h missing: out_of_bound (nearest candidate is 400 px away, bound is 120 px)",
-  "detail": {"healed": <the note>}
+  "detail": {"heal": <the note>}
 }
 ```
 
@@ -187,8 +193,9 @@ Replay, per step with `action.ref`:
    `"heal": {"recorded": "tree-recorded-logical-98.json", "current": "tree-current-logical-98.json"}`.
    The run's `result.status` becomes `fail` per `docs/trace-format.md`.
 
-CLI: `python3 -m phonelab replay ... --max-heal-px N` (int, default 120).
-The value is echoed into `run.json` as `"heal": {"max_distance_px": 120}`.
+CLI: `python3 -m phonelab trail replay <trail.json> [--times N] --max-heal-px N`
+(int, default 120). The value is echoed into `run.json` as
+`"heal": {"max_distance_px": 120}`.
 
 ## Tests: `tests/test_heal.py`
 
