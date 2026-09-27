@@ -1,0 +1,1094 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>phone-lab · trace</title>
+<style>
+  :root {
+    --bg: #121216;
+    --panel: #1c1c22;
+    --line: #2a2a33;
+    --fg: #e8e8ee;
+    --muted: #9a9aa8;
+    --blue: #5aa0ff;
+    --red: #ff5a5a;
+    --green: #3ddc84;
+    --grey: #8c8c96;
+    --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font: 14px/1.4 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--line);
+    position: sticky;
+    top: 0;
+    background: var(--bg);
+    z-index: 10;
+    flex-wrap: wrap;
+  }
+  header h1 {
+    font-size: 18px;
+    margin: 0;
+    letter-spacing: .02em;
+    white-space: nowrap;
+  }
+  .muted { color: var(--muted); }
+  select, input[type="number"], button {
+    background: #2b2b36;
+    color: var(--fg);
+    border: 1px solid #3a3a48;
+    border-radius: 6px;
+    padding: 5px 10px;
+    font: inherit;
+  }
+  select:focus, input[type="number"]:focus, button:focus {
+    outline: 2px solid var(--blue);
+  }
+  button { cursor: pointer; }
+  button:hover { background: #353542; }
+  button:disabled { opacity: .4; cursor: default; }
+  .nav-group { display: flex; align-items: center; gap: 6px; }
+  #device-info { font-size: 13px; margin-left: auto; }
+
+  /* Timeline Strip */
+  #timeline-container {
+    padding: 8px 16px;
+    border-bottom: 1px solid var(--line);
+    background: #16161c;
+    overflow-x: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .timeline-row {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+  }
+  .timeline-label {
+    width: 48px;
+    font-size: 11px;
+    color: var(--muted);
+    text-transform: uppercase;
+    flex-shrink: 0;
+  }
+  .timeline-boxes {
+    display: flex;
+    gap: 6px;
+  }
+  .step-box {
+    width: 52px;
+    height: 38px;
+    border-radius: 4px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    font-size: 11px;
+    line-height: 1.2;
+    flex-shrink: 0;
+    user-select: none;
+    border: 1px solid transparent;
+  }
+  .step-box .idx { font-weight: 600; }
+  .step-box .knd { font-size: 9px; opacity: .85; max-width: 48px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .step-box.current { outline: 2px solid var(--fg); outline-offset: 1px; }
+  .step-box.diff-differ { border: 2px solid var(--red) !important; }
+
+  /* Status Colors */
+  .status-ok { background: #183822; color: var(--green); }
+  .status-healed { background: #162b48; color: var(--blue); }
+  .status-fail, .status-refused, .status-error { background: #421818; color: var(--red); }
+  .status-skipped { background: #282830; color: var(--grey); }
+  .status-pending { background: #1e1e24; color: var(--muted); }
+
+  /* Main layout */
+  main {
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+  #diff-summary-card {
+    background: #1e1e26;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 8px 14px;
+    font-size: 13px;
+    display: flex;
+    gap: 16px;
+    flex-wrap: wrap;
+    align-items: center;
+  }
+  .diff-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .diff-chip {
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 600;
+  }
+  .diff-chip.same { background: #183822; color: var(--green); }
+  .diff-chip.differs { background: #421818; color: var(--red); }
+
+  .columns {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 16px;
+  }
+  .columns.two-col {
+    grid-template-columns: 1fr 1fr;
+  }
+  .col-view {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    min-width: 0;
+  }
+
+  /* Cards */
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .card.differs {
+    border-left: 4px solid var(--red);
+  }
+  .card-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: .04em;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .step-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    font-size: 15px;
+    font-weight: 600;
+  }
+  .badge {
+    font-size: 11px;
+    padding: 2px 7px;
+    border-radius: 10px;
+    background: #3a3a48;
+    color: #ddd;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+    font-weight: 600;
+  }
+  .ref-badge {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    background: #2a2a3a;
+    border: 1px solid #444458;
+    padding: 1px 5px;
+    border-radius: 4px;
+    color: #bcd8ff;
+  }
+
+  /* Screens row */
+  .screens-grid {
+    display: flex;
+    gap: 16px;
+    overflow-x: auto;
+    padding-bottom: 4px;
+  }
+  .screen-col {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-width: 140px;
+    flex-shrink: 0;
+  }
+  .screen-meta {
+    font-size: 12px;
+    font-weight: 600;
+  }
+  .capture-box {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .capture-label {
+    font-size: 11px;
+    color: var(--muted);
+    text-transform: uppercase;
+  }
+  .capture-box img {
+    display: block;
+    max-height: 40vh;
+    max-width: 100%;
+    width: auto;
+    height: auto;
+    background: #000;
+    border-radius: 4px;
+    cursor: pointer;
+    border: 1px solid var(--line);
+    transition: max-height 0.2s ease;
+  }
+  .capture-box img.enlarged {
+    max-height: 90vh;
+  }
+  .placeholder {
+    width: 140px;
+    height: 240px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #24242c;
+    color: var(--muted);
+    border-radius: 4px;
+    border: 1px solid var(--line);
+    font-size: 12px;
+    text-align: center;
+    padding: 8px;
+  }
+  .placeholder.error {
+    color: var(--red);
+    background: #2b1f1f;
+  }
+
+  /* Key-value details */
+  .kv-table {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 4px 12px;
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+  }
+  .kv-table .k { color: var(--muted); }
+  .kv-table .v { font-family: var(--font-mono); word-break: break-all; }
+
+  /* Timings bar */
+  .timings-bar {
+    display: flex;
+    height: 18px;
+    border-radius: 4px;
+    overflow: hidden;
+    background: #282832;
+    margin-top: 4px;
+  }
+  .timing-seg {
+    height: 100%;
+    position: relative;
+    cursor: help;
+  }
+  .timing-seg:nth-child(1) { background: #4a7bb0; }
+  .timing-seg:nth-child(2) { background: #3d8b7a; }
+  .timing-seg:nth-child(3) { background: #8b68b8; }
+  .timing-seg:nth-child(4) { background: #a67c3b; }
+  .timing-seg:nth-child(5) { background: #5a91cf; }
+  .timing-seg:nth-child(6) { background: #56a894; }
+  .timings-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    font-size: 11px;
+    color: var(--muted);
+    margin-top: 6px;
+  }
+  .timings-legend span { display: inline-flex; align-items: center; gap: 4px; }
+  .timings-dot { width: 8px; height: 8px; border-radius: 2px; }
+
+  /* Tree View */
+  .tab-bar {
+    display: flex;
+    gap: 6px;
+    border-bottom: 1px solid var(--line);
+    padding-bottom: 6px;
+  }
+  .tab-btn {
+    padding: 3px 8px;
+    font-size: 11px;
+    border-radius: 4px;
+    background: transparent;
+    border: 1px solid transparent;
+    color: var(--muted);
+  }
+  .tab-btn.active {
+    background: #2b2b38;
+    color: var(--fg);
+    border-color: #3f3f50;
+  }
+  .tree-list {
+    max-height: 280px;
+    overflow-y: auto;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    line-height: 1.6;
+    background: #15151a;
+    padding: 8px;
+    border-radius: 4px;
+    border: 1px solid var(--line);
+  }
+  .tree-node {
+    padding: 2px 4px;
+    border-radius: 2px;
+    white-space: nowrap;
+  }
+  .tree-node.highlighted {
+    background: #393952;
+    color: #fff;
+    font-weight: 600;
+  }
+  .empty-msg {
+    padding: 24px;
+    color: var(--muted);
+    text-align: center;
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>phone-lab · trace</h1>
+  <label for="run" class="muted">run:</label>
+  <select id="run"></select>
+
+  <label for="diff" class="muted">diff:</label>
+  <select id="diff">
+    <option value="">no diff</option>
+  </select>
+
+  <div class="nav-group">
+    <button id="prev-btn" title="Previous step (Left arrow / j)">◀</button>
+    <input id="step-input" type="number" min="0" value="0">
+    <button id="next-btn" title="Next step (Right arrow / k)">▶</button>
+  </div>
+
+  <button id="refresh-btn">Refresh</button>
+  <span id="device-info" class="muted"></span>
+</header>
+
+<div id="timeline-container">
+  <div class="timeline-row">
+    <span class="timeline-label">run</span>
+    <div id="timeline-primary" class="timeline-boxes"></div>
+  </div>
+  <div id="timeline-diff-row" class="timeline-row" hidden>
+    <span class="timeline-label">diff</span>
+    <div id="timeline-diff" class="timeline-boxes"></div>
+  </div>
+</div>
+
+<main>
+  <div id="diff-summary-card" hidden></div>
+  <div id="columns" class="columns">
+    <div id="primary-col" class="col-view"></div>
+    <div id="diff-col" class="col-view" hidden></div>
+  </div>
+</main>
+
+<script>
+(() => {
+  let runsList = [];
+  let primaryRun = null;
+  let diffRun = null;
+  let primaryStep = null;
+  let diffStep = null;
+  let currentIndex = 0;
+  const treeCache = new Map(); // runId/stepIndex/phase/dispKey -> parsed tree json
+
+  const el = (tag, cls, text) => {
+    const e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text != null) e.textContent = text;
+    return e;
+  };
+
+  const runSelect = document.getElementById('run');
+  const diffSelect = document.getElementById('diff');
+  const stepInput = document.getElementById('step-input');
+  const prevBtn = document.getElementById('prev-btn');
+  const nextBtn = document.getElementById('next-btn');
+  const refreshBtn = document.getElementById('refresh-btn');
+  const deviceInfo = document.getElementById('device-info');
+  const timelinePrimary = document.getElementById('timeline-primary');
+  const timelineDiff = document.getElementById('timeline-diff');
+  const timelineDiffRow = document.getElementById('timeline-diff-row');
+  const diffSummaryCard = document.getElementById('diff-summary-card');
+  const columns = document.getElementById('columns');
+  const primaryCol = document.getElementById('primary-col');
+  const diffCol = document.getElementById('diff-col');
+
+  function parseHash() {
+    const h = (location.hash || '').replace(/^#/, '');
+    const p = new URLSearchParams(h);
+    return {
+      run: p.get('run'),
+      diff: p.get('diff') || '',
+      step: p.has('step') ? parseInt(p.get('step'), 10) : 0
+    };
+  }
+
+  function updateHash() {
+    const p = new URLSearchParams();
+    if (primaryRun) p.set('run', primaryRun.run_id);
+    if (diffRun) p.set('diff', diffRun.run_id);
+    p.set('step', String(currentIndex));
+    history.replaceState(null, '', '#' + p.toString());
+  }
+
+  async function loadRuns() {
+    try {
+      const res = await fetch('/api/runs', { cache: 'no-store' });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      runsList = await res.json();
+      populateRunSelects();
+      syncStateFromHash();
+    } catch (e) {
+      primaryCol.replaceChildren(el('div', 'empty-msg', 'Failed to load runs: ' + e.message));
+    }
+  }
+
+  function populateRunSelects() {
+    const curRun = runSelect.value;
+    const curDiff = diffSelect.value;
+    runSelect.replaceChildren();
+    diffSelect.replaceChildren(el('option', null, 'no diff'));
+    diffSelect.firstChild.value = '';
+
+    for (const r of runsList) {
+      const st = (r.result && r.result.status) || 'unknown';
+      const label = `${r.run_id} · ${r.kind || '?'} · ${st} · ${r.step_count} steps`;
+      const opt1 = el('option', null, label);
+      opt1.value = r.run_id;
+      runSelect.appendChild(opt1);
+
+      const opt2 = el('option', null, label);
+      opt2.value = r.run_id;
+      diffSelect.appendChild(opt2);
+    }
+    if (curRun && runsList.some(r => r.run_id === curRun)) runSelect.value = curRun;
+    if (curDiff && runsList.some(r => r.run_id === curDiff)) diffSelect.value = curDiff;
+  }
+
+  async function syncStateFromHash() {
+    if (!runsList.length) {
+      primaryCol.replaceChildren(el('div', 'empty-msg', 'No runs found in runs dir.'));
+      return;
+    }
+    const params = parseHash();
+    let rId = params.run;
+    if (!rId || !runsList.some(r => r.run_id === rId)) {
+      rId = runsList[0].run_id;
+    }
+    runSelect.value = rId;
+
+    let dId = params.diff;
+    if (dId && !runsList.some(r => r.run_id === dId)) {
+      dId = '';
+    }
+    diffSelect.value = dId;
+
+    currentIndex = isNaN(params.step) || params.step < 0 ? 0 : params.step;
+    stepInput.value = currentIndex;
+
+    await onRunOrDiffChanged();
+  }
+
+  async function onRunOrDiffChanged() {
+    const rId = runSelect.value;
+    const dId = diffSelect.value;
+
+    primaryRun = await fetchRun(rId);
+    diffRun = dId ? await fetchRun(dId) : null;
+
+    if (primaryRun && primaryRun.device) {
+      const d = primaryRun.device;
+      deviceInfo.textContent = `${d.model || '?'} · Android ${d.android_release || '?'}`;
+    } else {
+      deviceInfo.textContent = '';
+    }
+
+    const max = Math.max(primaryRun?.steps?.length || 0, diffRun?.steps?.length || 0);
+    if (max > 0 && currentIndex >= max) currentIndex = max - 1;   // a shorter run clamps the step index
+    renderTimeline();
+    await loadCurrentSteps();
+    updateHash();
+  }
+
+  async function fetchRun(runId) {
+    if (!runId) return null;
+    try {
+      const r = await fetch(`/api/runs/${encodeURIComponent(runId)}`, { cache: 'no-store' });
+      if (!r.ok) return null;
+      return await r.json();
+    } catch {
+      return null;
+    }
+  }
+
+  async function fetchStep(runId, idx) {
+    if (!runId || idx < 0) return null;
+    try {
+      const r = await fetch(`/api/runs/${encodeURIComponent(runId)}/steps/${idx}`, { cache: 'no-store' });
+      if (!r.ok) return null;
+      return await r.json();
+    } catch {
+      return null;
+    }
+  }
+
+  async function loadCurrentSteps() {
+    stepInput.value = currentIndex;
+    primaryStep = primaryRun ? await fetchStep(primaryRun.run_id, currentIndex) : null;
+    diffStep = diffRun ? await fetchStep(diffRun.run_id, currentIndex) : null;
+    renderCurrentView();
+  }
+
+  function renderTimeline() {
+    timelinePrimary.replaceChildren();
+    timelineDiff.replaceChildren();
+    timelineDiffRow.hidden = !diffRun;
+
+    const pSteps = (primaryRun && primaryRun.steps) || [];
+    const dSteps = (diffRun && diffRun.steps) || [];
+    const maxSteps = Math.max(pSteps.length, dSteps.length);
+
+    for (let i = 0; i < maxSteps; i++) {
+      const pSummary = pSteps[i];
+      if (pSummary) {
+        const box = el('div', `step-box status-${pSummary.status || 'pending'}`);
+        if (i === currentIndex) box.classList.add('current');
+        box.append(el('div', 'idx', String(i)), el('div', 'knd', pSummary.kind || ''));
+        box.addEventListener('click', () => navigateTo(i));
+        timelinePrimary.appendChild(box);
+      } else {
+        const blank = el('div', 'step-box status-pending');
+        blank.style.opacity = '0.2';
+        timelinePrimary.appendChild(blank);
+      }
+
+      if (diffRun) {
+        const dSummary = dSteps[i];
+        if (dSummary) {
+          const box = el('div', `step-box status-${dSummary.status || 'pending'}`);
+          if (i === currentIndex) box.classList.add('current');
+          if (pSummary && pSummary.status !== dSummary.status) {
+            box.classList.add('diff-differ');
+          }
+          box.append(el('div', 'idx', String(i)), el('div', 'knd', dSummary.kind || ''));
+          box.addEventListener('click', () => navigateTo(i));
+          timelineDiff.appendChild(box);
+        } else {
+          const blank = el('div', 'step-box status-pending');
+          blank.style.opacity = '0.2';
+          timelineDiff.appendChild(blank);
+        }
+      }
+    }
+  }
+
+  function deepEqual(a, b) {
+    if (a === b) return true;
+    if (a == null || b == null) return false;
+    if (typeof a !== 'object' || typeof b !== 'object') return false;
+    const ka = Object.keys(a);
+    const kb = Object.keys(b);
+    if (ka.length !== kb.length) return false;
+    for (const k of ka) {
+      if (!kb.includes(k) || !deepEqual(a[k], b[k])) return false;
+    }
+    return true;
+  }
+
+  async function renderCurrentView() {
+    renderTimeline();
+    columns.classList.toggle('two-col', !!diffRun);
+    diffCol.hidden = !diffRun;
+
+    primaryCol.replaceChildren();
+    diffCol.replaceChildren();
+
+    if (!primaryStep) {
+      primaryCol.appendChild(el('div', 'card', 'No step data.'));
+    } else {
+      renderStepColumn(primaryCol, primaryRun, primaryStep, diffStep);
+    }
+
+    if (diffRun) {
+      if (!diffStep) {
+        diffCol.appendChild(el('div', 'card', 'no such step'));
+      } else {
+        renderStepColumn(diffCol, diffRun, diffStep, primaryStep);
+      }
+      renderDiffSummary();
+    } else {
+      diffSummaryCard.hidden = true;
+    }
+  }
+
+  async function renderDiffSummary() {
+    diffSummaryCard.hidden = false;
+    diffSummaryCard.replaceChildren();
+
+    if (!primaryStep || !diffStep) {
+      diffSummaryCard.appendChild(el('span', 'muted', 'Cannot compare steps.'));
+      return;
+    }
+
+    // Screens comparison (after capture png_sha256 equality per display)
+    const pCaps = (primaryStep.captures && primaryStep.captures.after) || [];
+    const dCaps = (diffStep.captures && diffStep.captures.after) || [];
+    const displaysMap = new Map();
+    for (const c of pCaps) displaysMap.set(c.logical_id, { name: c.name || `display ${c.logical_id}`, pSha: c.png_sha256 });
+    for (const c of dCaps) {
+      const entry = displaysMap.get(c.logical_id) || { name: c.name || `display ${c.logical_id}`, pSha: null };
+      entry.dSha = c.png_sha256;
+      displaysMap.set(c.logical_id, entry);
+    }
+
+    for (const [_, info] of displaysMap) {
+      const neither = info.pSha == null && info.dSha == null;      // OFF or uncaptured on both sides
+      const same = neither || info.pSha === info.dSha;
+      const chip = el('span', `diff-chip ${same ? 'same' : 'differs'}`,
+                      neither ? 'no screen' : same ? 'same screen' : 'screen differs');
+      const item = el('div', 'diff-item');
+      item.append(el('span', 'muted', info.name + ':'), chip);
+      diffSummaryCard.appendChild(item);
+    }
+
+    // Action comparison
+    const actSame = deepEqual(primaryStep.action, diffStep.action);
+    const actChip = el('span', `diff-chip ${actSame ? 'same' : 'differs'}`, actSame ? 'action same' : 'action differs');
+    const actItem = el('div', 'diff-item');
+    actItem.append(el('span', 'muted', 'action:'), actChip);
+    diffSummaryCard.appendChild(actItem);
+
+    // Result status comparison
+    const pStatus = primaryStep.result && primaryStep.result.status;
+    const dStatus = diffStep.result && diffStep.result.status;
+    const resSame = (pStatus === dStatus);
+    const resChip = el('span', `diff-chip ${resSame ? 'same' : 'differs'}`, resSame ? 'result same' : 'result differs');
+    const resItem = el('div', 'diff-item');
+    resItem.append(el('span', 'muted', 'result:'), resChip);
+    diffSummaryCard.appendChild(resItem);
+
+    // Duration delta
+    const pDur = (primaryStep.timings && primaryStep.timings.duration_ms) || 0;
+    const dDur = (diffStep.timings && diffStep.timings.duration_ms) || 0;
+    const delta = dDur - pDur;
+    const deltaSign = delta > 0 ? `+${delta}` : `${delta}`;
+    const durItem = el('div', 'diff-item');
+    durItem.append(el('span', 'muted', 'duration:'), el('span', null, `Δ duration ${deltaSign} ms`));
+    diffSummaryCard.appendChild(durItem);
+
+    // Tree refs diff: +A −R refs
+    const treeDiffItem = el('div', 'diff-item');
+    treeDiffItem.append(el('span', 'muted', 'tree:'), el('span', 'tree-diff-text', 'loading trees…'));
+    diffSummaryCard.appendChild(treeDiffItem);
+
+    computeTreeDiff(treeDiffItem.querySelector('.tree-diff-text'));
+  }
+
+  async function getTreeRefs(runId, stepIdx, phase) {
+    if (!runId || stepIdx < 0) return new Set();
+    const st = (runId === primaryRun?.run_id) ? primaryStep : diffStep;
+    const treesMap = (st && st.trees && st.trees[phase]) || {};
+    const refs = new Set();
+    for (const [dispKey, filename] of Object.entries(treesMap)) {
+      const tree = await fetchTree(runId, stepIdx, phase, dispKey, filename);
+      if (tree && Array.isArray(tree.nodes)) {
+        for (const n of tree.nodes) {
+          if (n.ref) refs.add(n.ref);
+        }
+      }
+    }
+    return refs;
+  }
+
+  async function computeTreeDiff(targetSpan) {
+    try {
+      const [pRefs, dRefs] = await Promise.all([
+        getTreeRefs(primaryRun.run_id, currentIndex, 'after'),
+        getTreeRefs(diffRun.run_id, currentIndex, 'after')
+      ]);
+      let added = 0, removed = 0;
+      for (const r of dRefs) if (!pRefs.has(r)) added++;
+      for (const r of pRefs) if (!dRefs.has(r)) removed++;
+      targetSpan.textContent = `+${added} −${removed} refs`;
+    } catch {
+      targetSpan.textContent = 'refs unavailable';
+    }
+  }
+
+  async function fetchTree(runId, stepIdx, phase, dispKey, filename) {
+    const key = `${runId}/${stepIdx}/${phase}/${dispKey}`;
+    if (treeCache.has(key)) return treeCache.get(key);
+    try {
+      const url = `/runs/${encodeURIComponent(runId)}/steps/${String(stepIdx).padStart(3, '0')}/${filename}`;
+      const r = await fetch(url, { cache: 'no-store' });
+      if (!r.ok) return null;
+      const data = await r.json();
+      treeCache.set(key, data);
+      return data;
+    } catch {
+      return null;
+    }
+  }
+
+  function renderStepColumn(col, run, step, otherStep) {
+    if (step.pending) {
+      col.appendChild(el('div', 'card', 'step not written yet'));
+      return;
+    }
+
+    const titleCard = el('div', 'card');
+    const stepHdr = el('div', 'step-header');
+    const durMs = (step.timings && step.timings.duration_ms) || 0;
+    const st = (step.result && step.result.status) || 'unknown';
+    const badge = el('span', `badge status-${st}`, st);
+    stepHdr.append(
+      el('span', null, `step ${String(step.index).padStart(3, '0')} · ${step.name || ''} · `),
+      badge,
+      el('span', 'muted', ` · ${durMs} ms`)
+    );
+    titleCard.appendChild(stepHdr);
+    col.appendChild(titleCard);
+
+    // Screens
+    renderScreensCard(col, run, step, otherStep);
+
+    // Action Card
+    renderActionCard(col, step, otherStep);
+
+    // Predicate Card (hidden when null)
+    if (step.predicate) {
+      renderPredicateCard(col, step, otherStep);
+    }
+
+    // Result Card
+    renderResultCard(col, step, otherStep);
+
+    // Timings Card
+    renderTimingsCard(col, step, otherStep);
+
+    // Tree Card
+    renderTreeCard(col, run, step, otherStep);
+  }
+
+  function renderScreensCard(col, run, step, otherStep) {
+    const card = el('div', 'card');
+    card.appendChild(el('div', 'card-title', 'Screens'));
+    const grid = el('div', 'screens-grid');
+
+    const befores = (step.captures && step.captures.before) || [];
+    const afters = (step.captures && step.captures.after) || [];
+    const afterMap = new Map(afters.map(c => [c.logical_id, c]));
+
+    const stepDir = String(step.index).padStart(3, '0');
+
+    for (const b of befores) {
+      const a = afterMap.get(b.logical_id);
+      const colDiv = el('div', 'screen-col');
+      const meta = el('div', 'screen-meta', `${b.name || 'Display'} (logical ${b.logical_id})`);
+      colDiv.appendChild(meta);
+
+      // Before
+      colDiv.appendChild(createScreenPanel(run.run_id, stepDir, 'before', b));
+      // After
+      colDiv.appendChild(createScreenPanel(run.run_id, stepDir, 'after', a));
+
+      grid.appendChild(colDiv);
+    }
+    card.appendChild(grid);
+
+    // If diff run active and screens differ
+    if (otherStep) {
+      const pAfterSha = (step.captures?.after || []).map(c => c.png_sha256).join(',');
+      const oAfterSha = (otherStep.captures?.after || []).map(c => c.png_sha256).join(',');
+      if (pAfterSha !== oAfterSha) card.classList.add('differs');
+    }
+
+    col.appendChild(card);
+  }
+
+  function createScreenPanel(runId, stepDir, label, cap) {
+    const box = el('div', 'capture-box');
+    box.appendChild(el('div', 'capture-label', label));
+    if (!cap || !cap.image) {
+      box.appendChild(el('div', 'placeholder', 'display off'));
+    } else {
+      const img = el('img');
+      img.src = `/runs/${encodeURIComponent(runId)}/steps/${stepDir}/${cap.image}`;
+      img.alt = `${label} display`;
+      img.title = 'Click to toggle 90vh preview';
+      img.addEventListener('click', () => img.classList.toggle('enlarged'));
+      img.addEventListener('error', () => {
+        const err = el('div', 'placeholder error', 'missing file');
+        box.replaceChild(err, img);
+      });
+      box.appendChild(img);
+    }
+    return box;
+  }
+
+  function renderActionCard(col, step, otherStep) {
+    const card = el('div', 'card');
+    card.appendChild(el('div', 'card-title', 'Action'));
+
+    const act = step.action || {};
+    const kv = el('div', 'kv-table');
+    kv.append(el('span', 'k', 'kind:'), el('span', 'v', act.kind || '-'));
+    kv.append(el('span', 'k', 'display_id:'), el('span', 'v', String(act.display_id ?? '-')));
+    const refVal = act.ref ? el('span', 'ref-badge', act.ref) : el('span', 'v', '-');
+    kv.append(el('span', 'k', 'ref:'), refVal);
+
+    if (act.detail && typeof act.detail === 'object') {
+      for (const [k, v] of Object.entries(act.detail)) {
+        kv.append(el('span', 'k', k + ':'), el('span', 'v', typeof v === 'object' ? JSON.stringify(v) : String(v)));
+      }
+    }
+    card.appendChild(kv);
+
+    if (otherStep && !deepEqual(step.action, otherStep.action)) {
+      card.classList.add('differs');
+    }
+    col.appendChild(card);
+  }
+
+  function renderPredicateCard(col, step, otherStep) {
+    const card = el('div', 'card');
+    card.appendChild(el('div', 'card-title', 'Predicate'));
+
+    const pred = step.predicate || {};
+    const kv = el('div', 'kv-table');
+    for (const [k, v] of Object.entries(pred)) {
+      kv.append(el('span', 'k', k + ':'), el('span', 'v', typeof v === 'object' ? JSON.stringify(v) : String(v)));
+    }
+    card.appendChild(kv);
+
+    if (otherStep && !deepEqual(step.predicate, otherStep.predicate)) {
+      card.classList.add('differs');
+    }
+    col.appendChild(card);
+  }
+
+  function renderResultCard(col, step, otherStep) {
+    const card = el('div', 'card');
+    card.appendChild(el('div', 'card-title', 'Result'));
+
+    const res = step.result || {};
+    const kv = el('div', 'kv-table');
+    const st = res.status || 'unknown';
+    const badge = el('span', `badge status-${st}`, st);
+    kv.append(el('span', 'k', 'status:'), badge);
+    if (res.message != null) {
+      kv.append(el('span', 'k', 'message:'), el('span', 'v', res.message));
+    }
+    if (res.detail && typeof res.detail === 'object') {
+      for (const [k, v] of Object.entries(res.detail)) {
+        kv.append(el('span', 'k', k + ':'), el('span', 'v', typeof v === 'object' ? JSON.stringify(v) : String(v)));
+      }
+    }
+    card.appendChild(kv);
+
+    if (otherStep && (res.status !== (otherStep.result && otherStep.result.status))) {
+      card.classList.add('differs');
+    }
+    col.appendChild(card);
+  }
+
+  function renderTimingsCard(col, step, otherStep) {
+    const card = el('div', 'card');
+    card.appendChild(el('div', 'card-title', 'Timings'));
+
+    const timings = step.timings || {};
+    const totalMs = timings.duration_ms || 0;
+    card.appendChild(el('div', null, `${totalMs} ms total`));
+
+    const phases = timings.phases || {};
+    const phaseEntries = Object.entries(phases);
+
+    if (phaseEntries.length && totalMs > 0) {
+      const bar = el('div', 'timings-bar');
+      const legend = el('div', 'timings-legend');
+      const palette = ['#4a7bb0', '#3d8b7a', '#8b68b8', '#a67c3b', '#5a91cf', '#56a894'];
+
+      phaseEntries.forEach(([pName, pMs], idx) => {
+        const pct = Math.max(1, (pMs / totalMs) * 100);
+        const seg = el('div', 'timing-seg');
+        seg.style.width = pct + '%';
+        seg.style.background = palette[idx % palette.length];
+        seg.title = `${pName}: ${pMs} ms (${pct.toFixed(1)}%)`;
+        bar.appendChild(seg);
+
+        const legSpan = el('span');
+        const dot = el('span', 'timings-dot');
+        dot.style.background = palette[idx % palette.length];
+        legSpan.append(dot, document.createTextNode(`${pName} ${pMs} ms`));
+        legend.appendChild(legSpan);
+      });
+      card.append(bar, legend);
+    }
+    col.appendChild(card);
+  }
+
+  function renderTreeCard(col, run, step, otherStep) {
+    const card = el('div', 'card');
+    card.appendChild(el('div', 'card-title', 'Accessibility Tree'));
+
+    const trees = step.trees || {};
+    let activePhase = (trees.after && Object.keys(trees.after).length) ? 'after' : 'before';
+    let availableDisps = Object.keys(trees[activePhase] || {});
+    let activeDisp = availableDisps[0] || null;
+
+    const tabBar = el('div', 'tab-bar');
+    const phaseBtns = {};
+
+    ['before', 'after'].forEach(phase => {
+      const btn = el('button', 'tab-btn', phase);
+      if (phase === activePhase) btn.classList.add('active');
+      btn.addEventListener('click', () => {
+        activePhase = phase;
+        for (const [p, b] of Object.entries(phaseBtns)) b.classList.toggle('active', p === phase);
+        updateDispTabs();
+      });
+      phaseBtns[phase] = btn;
+      tabBar.appendChild(btn);
+    });
+
+    const dispTabsContainer = el('span', null);
+    tabBar.appendChild(dispTabsContainer);
+    card.appendChild(tabBar);
+
+    const treeList = el('div', 'tree-list');
+    card.appendChild(treeList);
+
+    function updateDispTabs() {
+      dispTabsContainer.replaceChildren();
+      const disps = Object.keys(trees[activePhase] || {});
+      if (!disps.includes(activeDisp)) activeDisp = disps[0] || null;
+
+      for (const d of disps) {
+        const btn = el('button', 'tab-btn', d);
+        if (d === activeDisp) btn.classList.add('active');
+        btn.addEventListener('click', () => {
+          activeDisp = d;
+          updateDispTabs();
+        });
+        dispTabsContainer.appendChild(btn);
+      }
+      loadTreeContent();
+    }
+
+    async function loadTreeContent() {
+      treeList.replaceChildren(el('div', 'muted', 'loading tree…'));
+      const filename = (trees[activePhase] || {})[activeDisp];
+      if (!filename) {
+        treeList.replaceChildren(el('div', 'muted', 'no tree'));
+        return;
+      }
+
+      const tree = await fetchTree(run.run_id, step.index, activePhase, activeDisp, filename);
+      if (!tree || !Array.isArray(tree.nodes) || !tree.nodes.length) {
+        treeList.replaceChildren(el('div', 'muted', 'no tree'));
+        return;
+      }
+
+      const actionRef = step.action && step.action.ref;
+      const frag = document.createDocumentFragment();
+
+      for (const n of tree.nodes) {
+        const line = el('div', 'tree-node');
+        line.style.paddingLeft = (n.depth * 14 + 4) + 'px';
+        if (actionRef && n.ref === actionRef) {
+          line.classList.add('highlighted');
+        }
+
+        const shortCls = (n.class || '').split('.').pop() || 'node';
+        const label = n.text || n.content_desc || '';
+        const b = n.bounds ? `[${n.bounds.join(', ')}]` : '';
+
+        line.append(document.createTextNode(`${shortCls} · `));
+        if (label) line.append(document.createTextNode(`"${label}" · `));
+        if (n.ref) {
+          const rBadge = el('span', 'ref-badge', n.ref);
+          rBadge.style.marginRight = '4px';
+          line.append(rBadge);
+        }
+        line.append(document.createTextNode(b));
+        frag.appendChild(line);
+      }
+      treeList.replaceChildren(frag);
+    }
+
+    updateDispTabs();
+    col.appendChild(card);
+  }
+
+  function navigateTo(idx) {
+    if (idx < 0) return;
+    const maxPrimary = primaryRun?.steps?.length || 0;
+    const maxDiff = diffRun?.steps?.length || 0;
+    const max = Math.max(maxPrimary, maxDiff);
+    if (max > 0 && idx >= max) idx = max - 1;
+    currentIndex = idx;
+    loadCurrentSteps();
+    updateHash();
+  }
+
+  prevBtn.addEventListener('click', () => navigateTo(currentIndex - 1));
+  nextBtn.addEventListener('click', () => navigateTo(currentIndex + 1));
+  stepInput.addEventListener('change', () => navigateTo(parseInt(stepInput.value, 10) || 0));
+
+  runSelect.addEventListener('change', async () => {
+    await onRunOrDiffChanged();
+  });
+
+  diffSelect.addEventListener('change', async () => {
+    await onRunOrDiffChanged();
+  });
+
+  refreshBtn.addEventListener('click', async () => {
+    refreshBtn.disabled = true;
+    await loadRuns();
+    refreshBtn.disabled = false;
+  });
+
+  window.addEventListener('hashchange', () => {
+    syncStateFromHash();
+  });
+
+  window.addEventListener('keydown', (ev) => {
+    const tag = (ev.target && ev.target.tagName) || '';
+    if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
+    if (ev.key === 'ArrowLeft' || ev.key === 'j') {
+      ev.preventDefault();
+      navigateTo(currentIndex - 1);
+    } else if (ev.key === 'ArrowRight' || ev.key === 'k') {
+      ev.preventDefault();
+      navigateTo(currentIndex + 1);
+    }
+  });
+
+  loadRuns();
+})();
+</script>
+</body>
+</html>
