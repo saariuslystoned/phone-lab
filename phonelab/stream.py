@@ -20,6 +20,7 @@ class H264StreamSource(FrameSource):
     Streams raw Annex-B H.264 video from `adb exec-out screenrecord` and decodes it via ffmpeg.
     Note that stream frames are downscaled (capped to max_height with aspect ratio preserved),
     unlike screencap frames which are full resolution.
+    Cleanup is scoped to the recorder's own device pid.
     """
 
     label: str = "h264-stream"
@@ -47,6 +48,14 @@ class H264StreamSource(FrameSource):
         self.out_h: int = 0
         self.last_frame_at: float | None = None
         self.cleanup: dict[str, Any] = {}
+
+        self.device_pid: str | None = None
+        self._pids_before_recorder: set[str] = set()
+        self._recorder_ever_spawned: bool = False
+        self._recorder_spawned_at: float | None = None
+        self._resolve_attempts: int = 0
+        self._last_resolve_attempt_at: float = 0.0
+        self._pid_lock = threading.Lock()
 
         self._started: bool = False
         self._started_at: float | None = None
@@ -131,7 +140,32 @@ class H264StreamSource(FrameSource):
         except Exception:
             return ""
 
-    def _cleanup_processes(self) -> None:
+    def _cleanup_scoped(self, pid: str) -> None:
+        try:
+            self.adb.shell("kill", "-INT", pid, timeout=5)
+        except AdbError:
+            pass
+        time.sleep(0.3)  # let screenrecord finish its SIGINT handler before checking
+        pids = ""
+        try:
+            pids = self.adb.shell("pidof", "screenrecord", timeout=5).strip()
+        except AdbError:
+            pass
+        killed = False
+        if pid in pids.split():
+            try:
+                self.adb.shell("kill", "-KILL", pid, timeout=5)
+                killed = True
+            except AdbError:
+                pass
+        self.cleanup = {
+            "device_pid": pid,
+            "pids_after_int": pids,
+            "killed": killed,
+            "broad": False,
+        }
+
+    def _cleanup_processes(self, from_restart: bool = False) -> None:
         for proc in (self.recorder, self.decoder):
             if proc is not None:
                 try:
@@ -155,6 +189,26 @@ class H264StreamSource(FrameSource):
         self.recorder = None
         self.decoder = None
 
+        if from_restart and self.device_pid is not None:
+            self._cleanup_scoped(self.device_pid)
+            self.device_pid = None
+
+    def _resolve_device_pid(self) -> None:
+        with self._pid_lock:
+            self._last_resolve_attempt_at = time.time()
+            if self.device_pid is not None:
+                return
+            try:
+                out = self.adb.shell("pidof", "screenrecord", timeout=5)
+                after = set(out.split())
+                diff = after - self._pids_before_recorder
+                if len(diff) == 1:
+                    self.device_pid = next(iter(diff))
+                else:
+                    self.device_pid = None
+            except AdbError:
+                self.device_pid = None
+
     def _start(self) -> None:
         if self._halt.is_set():
             return
@@ -173,9 +227,21 @@ class H264StreamSource(FrameSource):
         dec_argv = self._build_decoder_argv()
 
         try:
+            before = set(self.adb.shell("pidof", "screenrecord", timeout=5).split())
+        except AdbError:
+            before = set()
+        self._pids_before_recorder = before
+
+        try:
             self.recorder = self._spawn_recorder(rec_argv)
         except FileNotFoundError as exc:
             raise CaptureError(self.adb.redact(f"could not start recorder: {exc}"))
+
+        self._recorder_ever_spawned = True
+        self._recorder_spawned_at = time.time()
+        self.device_pid = None
+        self._resolve_attempts = 0
+        self._last_resolve_attempt_at = 0.0
 
         try:
             self.decoder = self._spawn_decoder(dec_argv)
@@ -211,11 +277,15 @@ class H264StreamSource(FrameSource):
             reader = recorder.stdout.read if recorder.stdout else None
         if reader is None:
             return
+        first_chunk = True
         try:
             while not halt.is_set():
                 chunk = reader(65536)
                 if not chunk:
                     break
+                if first_chunk:
+                    first_chunk = False
+                    self._resolve_device_pid()
                 if decoder.stdin is not None:
                     decoder.stdin.write(chunk)
                     decoder.stdin.flush()
@@ -253,7 +323,8 @@ class H264StreamSource(FrameSource):
     def _restart_segment(self) -> None:
         if self._halt.is_set():
             return
-        self._cleanup_processes()
+        self._cleanup_processes(from_restart=True)
+        self.device_pid = None
         self._start_processes()
 
     def _check_processes(self) -> None:
@@ -303,6 +374,18 @@ class H264StreamSource(FrameSource):
             self._start()
 
         self._check_processes()
+
+        now = time.time()
+        if (
+            self.device_pid is None
+            and self.recorder is not None
+            and self._recorder_spawned_at is not None
+            and (now - self._recorder_spawned_at) >= 0.5
+            and (now - self._last_resolve_attempt_at) >= 1.0
+            and self._resolve_attempts < 3
+        ):
+            self._resolve_attempts += 1
+            self._resolve_device_pid()
 
         with self._lock:
             if self._latest_raw is None:
@@ -356,21 +439,37 @@ class H264StreamSource(FrameSource):
             if thread is not None and thread.is_alive():
                 timeout = max(0.0, deadline - time.time())
                 thread.join(timeout=timeout)
+        self.recorder = None
+        self.decoder = None
 
-        try:
-            self.adb.shell("pkill", "-INT", "screenrecord", timeout=5)
-        except AdbError:
-            pass
-        pids = ""
-        try:
-            pids = self.adb.shell("pidof", "screenrecord", timeout=5).strip()
-        except AdbError:
-            pass
-        killed = False
-        if pids:
+        if self.device_pid is not None:
+            self._cleanup_scoped(self.device_pid)
+        elif self._recorder_ever_spawned:
             try:
-                self.adb.shell("pkill", "-KILL", "screenrecord", timeout=5)
-                killed = True
+                self.adb.shell("pkill", "-INT", "screenrecord", timeout=5)
             except AdbError:
                 pass
-        self.cleanup = {"pids_after_int": pids, "killed": killed}
+            pids = ""
+            try:
+                pids = self.adb.shell("pidof", "screenrecord", timeout=5).strip()
+            except AdbError:
+                pass
+            killed = False
+            if pids:
+                try:
+                    self.adb.shell("pkill", "-KILL", "screenrecord", timeout=5)
+                    killed = True
+                except AdbError:
+                    pass
+            self.cleanup = {
+                "pids_after_int": pids,
+                "killed": killed,
+                "broad": True,
+                "reason": "device pid unknown",
+            }
+        else:
+            self.cleanup = {
+                "device_pid": None,
+                "broad": False,
+                "skipped": "never started",
+            }

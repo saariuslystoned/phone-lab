@@ -24,6 +24,7 @@ class FakeStreamAdb:
 
     def __init__(self) -> None:
         self.shell_calls: list[tuple[str, ...]] = []
+        self.pidof_outputs: list[str] = []
         self.pidof_output: str = ""
 
     def redact(self, text: str) -> str:
@@ -32,6 +33,8 @@ class FakeStreamAdb:
     def shell(self, *args: str, timeout: float = 15) -> str:
         self.shell_calls.append(args)
         if args == ("pidof", "screenrecord"):
+            if self.pidof_outputs:
+                return self.pidof_outputs.pop(0)
             return self.pidof_output
         return ""
 
@@ -185,38 +188,198 @@ class StreamTests(unittest.TestCase):
             source.stop()
 
     def test_stop_cleanup(self):
-        adb = FakeStreamAdb()
-        adb.pidof_output = ""
         d = Display(
             sf_id="1", unique_id="u1", name="Inner Display", kind="physical",
             logical_id=0, width=4, height=6, state="ON", owner=None,
             status_bar_px=0, role="human"
         )
-        source = H264StreamSource(
-            adb, d, max_height=6,
-            spawn_recorder=lambda argv: subprocess.Popen([sys.executable, "-c", "import time; time.sleep(5)"], stdout=subprocess.PIPE, stderr=subprocess.PIPE),
-            spawn_decoder=lambda argv: subprocess.Popen([sys.executable, "-c", "import time; time.sleep(5)"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE),
-        )
-        source.next_frame()
-        source.stop()
-        self.assertEqual(adb.shell_calls, [("pkill", "-INT", "screenrecord"), ("pidof", "screenrecord")])
-        self.assertEqual(source.cleanup, {"pids_after_int": "", "killed": False})
 
-        adb2 = FakeStreamAdb()
-        adb2.pidof_output = "9876 5432"
-        source2 = H264StreamSource(
-            adb2, d, max_height=6,
-            spawn_recorder=lambda argv: subprocess.Popen([sys.executable, "-c", "import time; time.sleep(5)"], stdout=subprocess.PIPE, stderr=subprocess.PIPE),
-            spawn_decoder=lambda argv: subprocess.Popen([sys.executable, "-c", "import time; time.sleep(5)"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE),
+        def make_fake_proc():
+            return subprocess.Popen(
+                [sys.executable, "-c", "import time; time.sleep(5)"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                stdin=subprocess.PIPE,
+            )
+
+        # (a) with a resolvable pid the calls on stop are ("kill","-INT","200"),
+        # ("pidof","screenrecord") and, when the pid is still listed, ("kill","-KILL","200"),
+        # and NO pkill call appears; cleanup["device_pid"] == "200" and cleanup["broad"] is False
+        adb_a = FakeStreamAdb()
+        adb_a.pidof_outputs = ["100", "100 200", "100 200"]
+        source_a = H264StreamSource(
+            adb_a, d, max_height=6,
+            spawn_recorder=lambda argv: make_fake_proc(),
+            spawn_decoder=lambda argv: make_fake_proc(),
         )
-        source2.next_frame()
-        source2.stop()
-        self.assertEqual(adb2.shell_calls, [
-            ("pkill", "-INT", "screenrecord"),
+        source_a.next_frame()
+        source_a._resolve_device_pid()
+        self.assertEqual(source_a.device_pid, "200")
+
+        calls_before_stop = len(adb_a.shell_calls)
+        source_a.stop()
+        calls_on_stop = adb_a.shell_calls[calls_before_stop:]
+
+        self.assertEqual(calls_on_stop, [
+            ("kill", "-INT", "200"),
             ("pidof", "screenrecord"),
-            ("pkill", "-KILL", "screenrecord"),
+            ("kill", "-KILL", "200"),
         ])
-        self.assertEqual(source2.cleanup, {"pids_after_int": "9876 5432", "killed": True})
+        self.assertFalse(any("pkill" in c[0] for c in adb_a.shell_calls))
+        self.assertEqual(source_a.cleanup["device_pid"], "200")
+        self.assertFalse(source_a.cleanup["broad"])
+        self.assertTrue(source_a.cleanup["killed"])
+        self.assertEqual(source_a.cleanup["pids_after_int"], "100 200")
+
+        adb_a2 = FakeStreamAdb()
+        adb_a2.pidof_outputs = ["100", "100 200", "100"]
+        source_a2 = H264StreamSource(
+            adb_a2, d, max_height=6,
+            spawn_recorder=lambda argv: make_fake_proc(),
+            spawn_decoder=lambda argv: make_fake_proc(),
+        )
+        source_a2.next_frame()
+        source_a2._resolve_device_pid()
+        self.assertEqual(source_a2.device_pid, "200")
+
+        calls_before_stop2 = len(adb_a2.shell_calls)
+        source_a2.stop()
+        calls_on_stop2 = adb_a2.shell_calls[calls_before_stop2:]
+
+        self.assertEqual(calls_on_stop2, [
+            ("kill", "-INT", "200"),
+            ("pidof", "screenrecord"),
+        ])
+        self.assertFalse(any("pkill" in c[0] for c in adb_a2.shell_calls))
+        self.assertEqual(source_a2.cleanup["device_pid"], "200")
+        self.assertFalse(source_a2.cleanup["broad"])
+        self.assertFalse(source_a2.cleanup["killed"])
+        self.assertEqual(source_a2.cleanup["pids_after_int"], "100")
+
+        # (b) when pidof shows no new pid (returns "100" every time) the broad fallback
+        # runs with cleanup["broad"] is True and "reason" set
+        adb_b = FakeStreamAdb()
+        adb_b.pidof_output = "100"
+        source_b = H264StreamSource(
+            adb_b, d, max_height=6,
+            spawn_recorder=lambda argv: make_fake_proc(),
+            spawn_decoder=lambda argv: make_fake_proc(),
+        )
+        source_b.next_frame()
+        source_b._resolve_device_pid()
+        self.assertIsNone(source_b.device_pid)
+
+        source_b.stop()
+        self.assertTrue(source_b.cleanup["broad"])
+        self.assertEqual(source_b.cleanup.get("reason"), "device pid unknown")
+        self.assertIn(("pkill", "-INT", "screenrecord"), adb_b.shell_calls)
+        self.assertIn(("pkill", "-KILL", "screenrecord"), adb_b.shell_calls)
+
+        # (c) when two new pids appear ("100 200 300") the pid stays None and the broad fallback runs
+        adb_c = FakeStreamAdb()
+        adb_c.pidof_outputs = ["100", "100 200 300"]
+        adb_c.pidof_output = ""
+        source_c = H264StreamSource(
+            adb_c, d, max_height=6,
+            spawn_recorder=lambda argv: make_fake_proc(),
+            spawn_decoder=lambda argv: make_fake_proc(),
+        )
+        source_c.next_frame()
+        source_c._resolve_device_pid()
+        self.assertIsNone(source_c.device_pid)
+
+        source_c.stop()
+        self.assertTrue(source_c.cleanup["broad"])
+        self.assertEqual(source_c.cleanup.get("reason"), "device pid unknown")
+        self.assertIn(("pkill", "-INT", "screenrecord"), adb_c.shell_calls)
+
+        # (d) a source that never started does no shell calls on stop and records skipped
+        adb_d = FakeStreamAdb()
+        source_d = H264StreamSource(
+            adb_d, d, max_height=6,
+            spawn_recorder=lambda argv: make_fake_proc(),
+            spawn_decoder=lambda argv: make_fake_proc(),
+        )
+        source_d.stop()
+        self.assertEqual(adb_d.shell_calls, [])
+        self.assertEqual(source_d.cleanup, {
+            "device_pid": None,
+            "broad": False,
+            "skipped": "never started",
+        })
+
+        # Pump thread resolves pid on first chunk
+        adb_p = FakeStreamAdb()
+        adb_p.pidof_outputs = ["100", "100 888", "100 888"]
+        rec_script_p = "import sys; sys.stdout.buffer.write(b'MARKER'); sys.stdout.buffer.flush(); import time; time.sleep(5)"
+        dec_script_p = "import time; time.sleep(5)"
+        source_p = H264StreamSource(
+            adb_p, d, max_height=6,
+            spawn_recorder=lambda argv: subprocess.Popen(
+                [sys.executable, "-c", rec_script_p], stdout=subprocess.PIPE, stderr=subprocess.PIPE
+            ),
+            spawn_decoder=lambda argv: subprocess.Popen(
+                [sys.executable, "-c", dec_script_p], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+            ),
+        )
+        try:
+            source_p.next_frame()
+            deadline = time.time() + 3.0
+            while time.time() < deadline:
+                if source_p.device_pid is not None:
+                    break
+                time.sleep(0.02)
+            self.assertEqual(source_p.device_pid, "888")
+        finally:
+            source_p.stop()
+        self.assertEqual(source_p.cleanup["device_pid"], "888")
+        self.assertFalse(source_p.cleanup["broad"])
+
+        # next_frame bounded retry pid resolution
+        adb_n = FakeStreamAdb()
+        adb_n.pidof_outputs = ["100", "100", "100 999"]
+        source_n = H264StreamSource(
+            adb_n, d, max_height=6,
+            spawn_recorder=lambda argv: make_fake_proc(),
+            spawn_decoder=lambda argv: make_fake_proc(),
+        )
+        try:
+            source_n.next_frame()
+            self.assertIsNone(source_n.device_pid)
+            source_n.next_frame()
+            self.assertIsNone(source_n.device_pid)
+            source_n._recorder_spawned_at = time.time() - 0.6
+            source_n.next_frame()
+            self.assertIsNone(source_n.device_pid)
+            self.assertEqual(source_n._resolve_attempts, 1)
+            source_n.next_frame()
+            self.assertEqual(source_n._resolve_attempts, 1)
+            source_n._last_resolve_attempt_at = time.time() - 1.1
+            source_n.next_frame()
+            self.assertEqual(source_n.device_pid, "999")
+            self.assertEqual(source_n._resolve_attempts, 2)
+        finally:
+            source_n.stop()
+
+        # Restart segment cleanup: scoped kill on old pid, never broad
+        adb_r = FakeStreamAdb()
+        adb_r.pidof_outputs = ["100", "100 200", "100 200", "100", "100 500"]
+        source_r = H264StreamSource(
+            adb_r, d, max_height=6,
+            spawn_recorder=lambda argv: make_fake_proc(),
+            spawn_decoder=lambda argv: make_fake_proc(),
+        )
+        try:
+            source_r.next_frame()
+            source_r._resolve_device_pid()
+            self.assertEqual(source_r.device_pid, "200")
+            source_r._restart_segment()
+            self.assertFalse(any("pkill" in c[0] for c in adb_r.shell_calls))
+            self.assertIsNone(source_r.device_pid)
+            source_r._resolve_device_pid()
+            self.assertEqual(source_r.device_pid, "500")
+        finally:
+            source_r.stop()
 
     def test_missing_ffmpeg_raises_capture_error(self):
         adb = FakeStreamAdb()
