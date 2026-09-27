@@ -22,7 +22,7 @@ UI_PATH = Path(__file__).resolve().parent / "ui" / "index.html"
 SCHEMA = "phone-lab.freeze.v1"
 PANEL_HEIGHT = 1000
 GUTTER = 24
-TITLE_BAND = 120
+TITLE_BAND = 150
 FOOTER_BAND = 40
 CANVAS_BG = (18, 18, 22)
 PLACEHOLDER_BG = (48, 48, 54)
@@ -40,13 +40,24 @@ def _hms(at: float) -> str:
     return dt.datetime.fromtimestamp(at).strftime("%H:%M:%S.") + f"{int((at % 1) * 1000):03d}"
 
 
-def _session_line(session: dict | None) -> str:
+def _session_lines(session: dict | None) -> list[str]:
+    """The agent panel's session strip, split so it fits a 1080x1920 panel scaled to height 1000."""
     if not session or session.get("state") == "unknown":
-        return "Cua session: unknown to phone-lab"
+        return ["Cua session: unknown to phone-lab"]
     label = session.get("label") or str(session.get("session_id") or "")[:8]
     lease_s = (session.get("lease_remaining_now_ms") or 0) / 1000
     action = session.get("last_action") or {}
-    return f"Cua {label} · {session.get('package')} · lease {lease_s:.0f}s · last {action.get('kind', '-')} {action.get('result', '-')}"
+    return [f"Cua {label} · {session.get('package')}",
+            f"lease {lease_s:.0f}s · last {action.get('kind', '-')} {action.get('result', '-')}"]
+
+
+def _fit(text: str, font: ImageFont.ImageFont, max_width: int) -> str:
+    """Truncate with an ellipsis so the text stays inside its panel."""
+    if font.getlength(text) <= max_width:
+        return text
+    while text and font.getlength(text + "…") > max_width:
+        text = text[:-1]
+    return text + "…"
 
 
 def _panel_image(display: Display, frame: Frame | None) -> tuple[Image.Image | None, int, int]:
@@ -79,17 +90,18 @@ def compose(panels: list[tuple[Display, Frame | None]], device: dict, now: float
     x = GUTTER
     for display, frame, image, width, crop in tiles:
         top = GUTTER + TITLE_BAND
-        draw.text((x, GUTTER), f"{display.name} · logical {display.logical_id} · {display.width}x{display.height}",
-                  fill=TEXT, font=font_title)
+        draw.text((x, GUTTER), _fit(f"{display.name} · logical {display.logical_id} · {display.width}x{display.height}",
+                                    font_title, width), fill=TEXT, font=font_title)
         if frame is not None:
             line2 = f"seq {frame.seq} · captured {_hms(frame.captured_at)} · {frame.capture_ms} ms · {frame.fps:.1f} fps"
         else:
             line2 = "display off" if display.state == "OFF" else "no frame yet"
-        draw.text((x, GUTTER + 42), line2, fill=MUTED, font=font_small)
+        draw.text((x, GUTTER + 42), _fit(line2, font_small, width), fill=MUTED, font=font_small)
         session = None
         if display.role == "agent":
             session = sessions.get(display.logical_id) if display.logical_id is not None else None
-            draw.text((x, GUTTER + 74), _session_line(session), fill=BLUE, font=font_small)
+            for i, line in enumerate(_session_lines(session)):
+                draw.text((x, GUTTER + 74 + 28 * i), _fit(line, font_small, width), fill=BLUE, font=font_small)
         if image is not None:
             canvas.paste(image, (x, top))
         else:

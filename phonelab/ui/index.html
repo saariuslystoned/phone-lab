@@ -65,7 +65,7 @@
     const error = el('div', 'error'); error.hidden = true;
     root.append(head, media, foot, session, error);
     return { root, name, logical, badge, media, img, placeholder, foot, session, error,
-             seq: null, capturedAt: null, fps: 0, size: '', leaseMs: null, leaseAt: 0, lastAction: null, showing: null };
+             seq: null, capturedAt: null, fps: 0, size: '', leaseMs: null, leaseAt: 0, lastAction: null, showing: null, sessionKey: null };
   }
 
   function showMedia(p, node) {
@@ -101,21 +101,26 @@
       if (disp.role === 'agent') {
         p.session.hidden = false;
         const s = disp.session;
-        if (!s || s.state === 'unknown') { p.session.textContent = 'session unknown to phone-lab'; p.leaseMs = null; p.lastAction = null; }
+        if (!s || s.state === 'unknown') { if (p.sessionKey !== 'unknown') { p.sessionKey = 'unknown'; p.session.textContent = 'session unknown to phone-lab'; } p.leaseMs = null; p.lastAction = null; }
         else {
           p.leaseMs = s.lease_remaining_now_ms ?? 0; p.leaseAt = Date.now();
           p.lastAction = s.last_action || null;
           const label = s.label || (s.session_id || '').slice(0, 8);
-          p.session.replaceChildren(
-            el('span', null, `Cua ${label} · ${s.package || '?'} · `),
-            Object.assign(el('span', 'lease'), { textContent: 'lease …' }),
-            el('span', null, ' · last '),
-            Object.assign(el('span', 'la'), { textContent: '…' }));
+          const strip = `${s.session_id}|${label}|${s.package}`;
+          if (p.sessionKey !== strip) {           // rebuild only when the identity changes; tick() keeps the numbers fresh
+            p.sessionKey = strip;
+            p.session.replaceChildren(
+              el('span', null, `Cua ${label} · ${s.package || '?'} · `),
+              el('span', 'lease'),
+              el('span', null, ' · last '),
+              el('span', 'la'));
+          }
         }
-      } else { p.session.hidden = true; }
+      } else { p.session.hidden = true; p.sessionKey = null; }
     }
     for (const [id, p] of panels) if (!seen.has(id)) { p.root.remove(); panels.delete(id); }
     if (order.length) main.replaceChildren(...order); else main.replaceChildren(el('div', 'empty', 'no displays reported'));
+    tick();
   }
 
   function tick() {

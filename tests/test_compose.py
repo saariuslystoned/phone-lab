@@ -75,6 +75,15 @@ class ComposeTests(unittest.TestCase):
         # 120x(200-20) scaled to height 1000 -> width 667; canvas = gutter + width + gutter
         self.assertEqual(image.width, 24 + round(120 * 1000 / 180) + 24)
 
+    def test_long_lines_are_truncated_inside_the_panel(self):
+        from phonelab.server import _fit
+        from PIL import ImageFont
+        font = ImageFont.load_default(size=22)
+        text = "lease 55s · last tap increment ok · " * 4
+        fitted = _fit(text, font, 300)
+        self.assertTrue(fitted.endswith("…") and font.getlength(fitted) <= 300)
+        self.assertEqual(_fit("short", font, 300), "short")
+
     def test_unknown_agent_session_still_renders(self):
         image, manifest = compose([(AGENT, None)], DEVICE, 1_790_000_000.0)
         self.assertIsNone(manifest["panels"][0]["session"])
@@ -106,7 +115,7 @@ class FreezeTests(unittest.TestCase):
             self.assertRegex(Path(first["image"]).parent.name, r"^\d{8}$")
             self.assertRegex(Path(first["image"]).name, r"^freeze-\d{6}(-\d+)?\.png$")
             with Image.open(first["image"]) as composite:
-                self.assertEqual(composite.height, 24 + 120 + 1000 + 24 + 40 + 24)
+                self.assertEqual(composite.height, 24 + 150 + 1000 + 24 + 40 + 24)
             recent = recent_freezes(Path(tmp))
             self.assertEqual(len(recent), 2)
             self.assertEqual(recent[0]["image"], Path(second["image"]).name, "newest first")
