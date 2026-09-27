@@ -76,5 +76,12 @@ that reviewers can see where new code should land.
 - **Shared machine.** Emulators (`emulator-*` serials) are ignored unless
   selected with `--serial` or allowed with `--allow-emulators`; with several
   phones attached, pick one with `--serial`, `--model`, or `ANDROID_SERIAL`.
-  Two phone-lab instances on one machine still need distinct `--port` and
-  `--runs-dir` values (not enforced yet).
+  A busy port fails fast (`--port 0` picks a free one); runs and the
+  session registry live under `runs/phone-lab-runs/<device-tag>/`, where the
+  tag is derived from the model name; a second viewer for the same device
+  is reported (banner, `/api/state.viewers`), not refused. Still open: two
+  phones of the same model share a tag unless one passes `--device-tag`;
+  legacy untagged records in the flat `sessions/` directory are read by
+  every device's viewer; presence is advisory, so two viewers that both
+  freeze still write into the same day directory (names never collide).
+  Spec: `plans/shared-machine-instances.md`.

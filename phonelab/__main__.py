@@ -28,8 +28,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     srv = sub.add_parser("serve", help="run the live multi-display viewer", parents=[device])
     srv.add_argument("--host", default="127.0.0.1")
-    srv.add_argument("--port", type=int, default=8791)
+    srv.add_argument("--port", type=int, default=8791, help="0 picks a free port and prints it")
     srv.add_argument("--runs-dir", default=DEFAULT_RUNS_DIR)
+    srv.add_argument("--device-tag", help="override the device tag (derived from model by default)")
     srv.add_argument("--max-height", type=int, default=1000, help="preview JPEG height cap")
 
     cua = sub.add_parser("cua", help="cua-driver helpers")
@@ -41,6 +42,7 @@ def build_parser() -> argparse.ArgumentParser:
     demo.add_argument("--tap-every", type=float, default=8.0, help="seconds between increment taps")
     demo.add_argument("--no-taps", action="store_true")
     demo.add_argument("--runs-dir", default=DEFAULT_RUNS_DIR)
+    demo.add_argument("--device-tag", help="override the device tag (derived from model by default)")
     return parser
 
 
@@ -54,14 +56,19 @@ def main(argv: list[str] | None = None) -> int:
     except AdbError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
-    runs_dir = Path(getattr(args, "runs_dir", DEFAULT_RUNS_DIR))
+
+    tag = getattr(args, "device_tag", None) or adb.tag
+    adb.tag = tag
+    runs_root = Path(getattr(args, "runs_dir", DEFAULT_RUNS_DIR))
+    device_dir = runs_root / tag
+    registry = Registry(runs_root, tag)
+
     if args.command == "inventory":
         print(json.dumps([to_json(d) for d in inventory(adb)], indent=2))
         return 0
     if args.command == "serve":
         from .server import serve
-        serve(adb, Registry(runs_dir), args.host, args.port, runs_dir, args.max_height)
-        return 0
+        return serve(adb, registry, args.host, args.port, device_dir, args.max_height)
     if args.command == "cua":
         from .cua import CuaDriver, demo as run_demo
 
@@ -69,7 +76,7 @@ def main(argv: list[str] | None = None) -> int:
             raise KeyboardInterrupt
 
         signal.signal(signal.SIGTERM, _terminate)
-        return run_demo(adb, CuaDriver(adb, Path(args.driver)), Registry(runs_dir),
+        return run_demo(adb, CuaDriver(adb, Path(args.driver)), registry,
                         args.duration, args.tap_every, not args.no_taps)
     return 2
 

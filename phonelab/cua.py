@@ -160,7 +160,7 @@ def demo(adb: Adb, driver: CuaDriver, registry: Registry, duration_s: int, tap_e
                         package=None, target_id=None, state="active",
                         lease_remaining_ms=int(created.get("lease_remaining_ms", 0)), lease_checked_at=now,
                         last_action={"kind": "create", "at": now, "result": "ok", "detail": {}},
-                        owner=DEMO_OWNER, updated_at=now)
+                        owner=DEMO_OWNER, updated_at=now, device_tag=getattr(adb, "tag", None))
     registry.write(rec)
     _log(adb, f"session {sid[:8]} created · logical display {rec.display_id} · lease {rec.lease_remaining_ms} ms")
     rc = 0

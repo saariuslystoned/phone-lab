@@ -6,7 +6,7 @@ import unittest
 from types import SimpleNamespace
 from unittest import mock
 
-from phonelab.adb import Adb, AdbError, parse_devices
+from phonelab.adb import Adb, AdbError, device_tag, parse_devices
 
 FOLD = "1A2B3C4D5E6F7G"
 OTHER = "9Z8Y7X6W5V4U3T"
@@ -34,6 +34,15 @@ class ParseTests(unittest.TestCase):
         self.assertEqual(parse_devices(UNAUTHORIZED), [])
 
 
+class DeviceTagTests(unittest.TestCase):
+    def test_device_tag_cases(self):
+        self.assertEqual(device_tag("Pixel 10 Pro Fold"), "pixel-10-pro-fold")
+        self.assertEqual(device_tag("Pixel_9"), "pixel-9")
+        self.assertEqual(device_tag("sdk gphone64 arm64"), "sdk-gphone64-arm64")
+        self.assertEqual(device_tag(""), "unknown")
+        self.assertEqual(device_tag("  --  "), "unknown")
+
+
 class ResolveTests(unittest.TestCase):
     def setUp(self):
         self.env = mock.patch.dict(os.environ, {}, clear=False)
@@ -46,6 +55,7 @@ class ResolveTests(unittest.TestCase):
     def test_phone_wins_over_emulator(self):
         adb = _adb(DEVICES).resolve()
         self.assertEqual((adb.serial, adb.model, adb.kind), (FOLD, "Pixel 10 Pro Fold", "physical"))
+        self.assertEqual(adb.tag, "pixel-10-pro-fold")
 
     def test_emulator_alone_is_not_picked(self):
         only_emulator = "\n".join(l for l in DEVICES.splitlines() if FOLD not in l) + "\n"
@@ -67,8 +77,10 @@ class ResolveTests(unittest.TestCase):
     def test_model_picks(self):
         adb = _adb(TWO_PHONES, model="pixel 9").resolve()
         self.assertEqual(adb.serial, OTHER)
+        self.assertEqual(adb.tag, "pixel-9")
         adb = _adb(TWO_PHONES, model="Pixel_10_Pro_Fold").resolve()
         self.assertEqual(adb.serial, FOLD)
+        self.assertEqual(adb.tag, "pixel-10-pro-fold")
         with self.assertRaises(AdbError) as ctx:
             _adb(TWO_PHONES, model="Pixel 8").resolve()
         self.assertIn("Pixel 8", str(ctx.exception))
@@ -78,11 +90,13 @@ class ResolveTests(unittest.TestCase):
         os.environ["ANDROID_SERIAL"] = OTHER
         adb = _adb(TWO_PHONES).resolve()
         self.assertEqual(adb.model, "Pixel 9")
+        self.assertEqual(adb.tag, "pixel-9")
         self.assertEqual(adb.redact(f"x {OTHER} y"), "x <serial> y")
 
     def test_explicit_serial_can_pick_an_emulator(self):
         adb = _adb(DEVICES, serial="emulator-5554").resolve()
         self.assertEqual(adb.kind, "emulator")
+        self.assertEqual(adb.tag, "sdk-gphone64-arm64")
 
     def test_missing_requested_serial(self):
         with self.assertRaises(AdbError) as ctx:
