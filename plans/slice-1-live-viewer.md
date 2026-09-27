@@ -288,3 +288,42 @@ python3 -m phonelab cua demo --driver PATH [--duration 300] [--tap-every 8] [--n
 3. With `cua demo` running, the viewer shows display 0 and the Cua display
    live with fps ≥ 0.8 each, the Cua panel labelled with package, lease, and
    the last tap result, and a freeze produces a composite plus manifest.
+
+## Appendix — cua-driver CLI shapes (measured on the Fold, 2026-09-26)
+
+`cua.py` builds argv as `<binary> --device <serial> [--session <sid>] <args...>`.
+The Android backend has no `session launch`/`session tap` verbs; the exact
+forms are:
+
+| Method | `<args...>` | `--session`? | Reply fields used |
+|---|---|---|---|
+| `create(allow_apps, label)` | `session create --allow-app <pkg> [--allow-app ...] --label <label>` | no | `data.session_id`, `data.display_id`, `data.lease_remaining_ms`, `data.label` |
+| `launch(sid, package)` | `app launch --package <pkg>` | yes | `data.target_id`, `data.package`, `data.display_id` |
+| `inspect(sid)` | `session inspect` | yes | `data.lease_remaining_ms`, `data.state`, `data.package`, `data.target_id`, `data.display_id` |
+| `renew(sid)` | `session renew` | yes | same as inspect (lease back to 60000) |
+| `snapshot(sid, target)` | `snapshot --target <target_id>` | yes | `data.snapshot_id`, `data.frame_age_ms`, `data.width`, `data.height` (`data.image_base64` is dropped) |
+| `tap(sid, snapshot_id, x, y)` | `tap --snapshot <snapshot_id> --x <x> --y <y>` | yes | `status == "ok"`; `data` is empty, `action` describes delivery |
+| `stop(sid)` | `session stop` | yes | `data.state == "stopped"`, `data.cleanup` |
+
+Every reply is one JSON object on stdout:
+`{"contract_version": "cua.android.v0", "status": "ok"|"refused"|"error", "exit_code": N, "data": {...}, "error": {...}}`.
+A refusal has `exit_code` 3 and `error.reason` (for example `"frame_stale"`,
+`"stale_snapshot"`); an argument problem has `exit_code` 2 and
+`error.message`. `CuaError(status, reason)` takes `reason` from
+`error.reason`, falling back to `error.message`, then `"unknown"`. Both
+`frame_stale` and `stale_snapshot` mean "the snapshot is no longer
+actionable": the demo takes a fresh snapshot and retries (up to three
+times) and counts the retry in `last_action.detail["frame_stale_retries"]`.
+
+Measured costs: create 0.8 s, launch 0.65 s, inspect/renew 0.45 s,
+snapshot 0.8 s, tap 0.6 s, fixture content-provider read 1.3 s.
+
+`fixture_state()` parses the `adb shell content query --uri
+content://ai.cua.fixture.notes.state` output: one row whose `json=` value
+holds `{"counter": n, "display_id": 99, "controls": {"increment": {"x": 540,
+"y": 263}, "editor": {...}}, "window_focus": true, ...}`.
+
+The Cua display appears in `dumpsys` as `"Cua agent"` (uniqueId
+`virtual:com.android.shell,2000,Cua agent,<n>`) with a fresh logical id per
+session (98, 99, ...); the `--label` is only visible through `session
+inspect`, which is why the registry carries it.
