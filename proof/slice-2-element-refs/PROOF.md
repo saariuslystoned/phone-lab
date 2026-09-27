@@ -164,9 +164,11 @@ back on the launcher, inventory shows only the two physical panels.
   redacted by design); no stability run was made on display 0 because the
   human's screen changes under them.
 - The Pixel 10 Pro XL was not used (different geometry check deferred).
-- Public sanitized images: the two toast screencaps contain only the
-  fixture screen and could be published, but were not pushed to
-  `saari-co/public-oss-proof-assets` in this run.
+- Public images: the two toast screencaps (fixture screen only) are
+  published at `saari-co/public-oss-proof-assets@7013006`,
+  `phone-lab/3/2026-09-27/slice2-toast-on-cua-display.png` and
+  `slice2-toast-during-api-capture.png`; the viewer screenshots show the
+  personal home screen and were not saved.
 - The demo's registry record overwrites the server's `tap ref` last action
   within 2 s (see `docs/feature-map.md`, Known limits); slice 3 should give
   the recorder ownership of the session.
