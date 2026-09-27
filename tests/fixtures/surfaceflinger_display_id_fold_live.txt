@@ -1,0 +1,4 @@
+Display 4619827677550801152 (HWC display 0): port=0 pnpId=GGL screenPartStatus=ORIGINAL displayName="Common Panel"
+Display 4619827677550801153 (HWC display 1): port=1 pnpId=GGL screenPartStatus=ORIGINAL displayName="Common Panel"
+Display 11529215050245041331 (Virtual display): displayName="studio.screen.sharing:0" uniqueId="virtual:com.android.shell,2000,studio.screen.sharing:0,88"
+Display 11529215047354549223 (Virtual display): displayName="Cua agent" uniqueId="virtual:com.android.shell,2000,Cua agent,89"
