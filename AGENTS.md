@@ -6,6 +6,10 @@ phone-lab is a public MIT repo. These rules apply to every agent and worker.
 
 - Test device: Bobby's registered Pixel 10 Pro Fold on USB ADB. Never print,
   log, commit, or publish its serial; show the model name instead.
+- Other agents may have emulators and phones attached to the same machine.
+  phone-lab never selects an `emulator-*` serial implicitly, and when
+  several phones are attached it stops and asks for `--serial`, `--model`,
+  or `ANDROID_SERIAL`, naming models only.
 - Inner panel is logical display 0; the cover panel is logical display 3.
   SurfaceFlinger ids (for `screencap -d`) and logical ids (for `input -d`,
   Cua `display_id`) are different namespaces; join them on `uniqueId`.

@@ -45,26 +45,39 @@ def get_json(url: str, timeout: float = 10, method: str = "GET"):
         return json.load(resp)
 
 
-def resolve_serial(explicit: str | None) -> tuple[str | None, str]:
-    """The serial without printing it: --serial, ANDROID_SERIAL, `adb get-serialno`, or the single device."""
+def resolve_serial(explicit: str | None, model: str | None = None, allow_emulators: bool = False) -> tuple[str | None, str]:
+    """The serial without printing it: --serial, ANDROID_SERIAL, else the single physical device.
+
+    Mirrors phonelab.adb.Adb.resolve: other agents' emulators (emulator-* serials) are never chosen
+    implicitly, and --model narrows by model name.
+    """
     if explicit:
         return explicit, "flag"
     if os.environ.get("ANDROID_SERIAL"):
         return os.environ["ANDROID_SERIAL"], "env"
     try:
-        out = subprocess.run(["adb", "get-serialno"], capture_output=True, text=True, timeout=15)
-    except (OSError, subprocess.TimeoutExpired):
-        return None, "adb unavailable"
-    if out.returncode == 0 and out.stdout.strip() and out.stdout.strip() != "unknown":
-        return out.stdout.strip(), "adb get-serialno"
-    try:
         rows = subprocess.run(["adb", "devices", "-l"], capture_output=True, text=True, timeout=15).stdout.splitlines()[1:]
     except (OSError, subprocess.TimeoutExpired):
         return None, "adb unavailable"
-    devices = [r.split()[0] for r in rows if len(r.split()) > 1 and r.split()[1] == "device"]
-    if len(devices) == 1:
-        return devices[0], "single device"
-    return None, f"{len(devices)} devices attached; pass --serial"
+    devices = []
+    for row in rows:
+        parts = row.split()
+        if len(parts) < 2 or parts[1] != "device":
+            continue
+        fields = dict(t.split(":", 1) for t in parts[2:] if ":" in t)
+        devices.append({"serial": parts[0], "model": fields.get("model", "unknown").replace("_", " "),
+                        "kind": "emulator" if parts[0].startswith("emulator-") else "physical"})
+    pool = devices
+    if model:
+        pool = [d for d in pool if d["model"].casefold() == model.replace("_", " ").strip().casefold()]
+    if not allow_emulators:
+        pool = [d for d in pool if d["kind"] == "physical"]
+    seen = ", ".join(f"{d['model']} ({d['kind']})" for d in devices) or "none"
+    if len(pool) == 1:
+        return pool[0]["serial"], "model match" if model else "single physical device"
+    if not pool:
+        return None, f"no matching physical device; seen: {seen}"
+    return None, f"{len(pool)} devices match ({seen}); pass --serial or --model"
 
 
 def stats(values: list[float]) -> dict | None:
@@ -203,6 +216,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--no-require-agent", dest="require_agent", action="store_false")
     ap.add_argument("--skip-freeze", action="store_true")
     ap.add_argument("--serial", help="device serial for the privacy grep (never printed); also ANDROID_SERIAL")
+    ap.add_argument("--model", help='pick the device by model name, e.g. "Pixel 10 Pro Fold"')
+    ap.add_argument("--allow-emulators", action="store_true", help="allow an emulator-* device to be chosen implicitly")
     ap.add_argument("--repo", default=".", help="checkout to grep for the serial")
     ap.add_argument("--output", help="also write the verdict JSON here")
     args = ap.parse_args(argv)
@@ -215,7 +230,7 @@ def main(argv: list[str] | None = None) -> int:
                           "start": ["python3 -m phonelab cua demo --driver <cua-driver> --duration 900 --tap-every 8 [--serial S]",
                                     "python3 -m phonelab serve --port 8791 [--serial S]"]}, indent=1))
         return 2
-    serial, source = resolve_serial(args.serial)
+    serial, source = resolve_serial(args.serial, args.model, args.allow_emulators)
     if not serial:
         print(json.dumps({"result": "setup", "error": f"cannot determine the device serial for the privacy grep ({source})"}, indent=1))
         return 2

@@ -73,5 +73,8 @@ that reviewers can see where new code should land.
   SurfaceFlinger id (uniqueId and logical id stay). Capture threads follow
   uniqueId, so one transient "screencap returned no PNG" per snapshot is
   expected and the sequence continues.
-- **One device.** With more than one adb device attached every command
-  needs `--serial`.
+- **Shared machine.** Emulators (`emulator-*` serials) are ignored unless
+  selected with `--serial` or allowed with `--allow-emulators`; with several
+  phones attached, pick one with `--serial`, `--model`, or `ANDROID_SERIAL`.
+  Two phone-lab instances on one machine still need distinct `--port` and
+  `--runs-dir` values (not enforced yet).

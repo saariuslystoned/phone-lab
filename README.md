@@ -33,7 +33,10 @@ python3 -m phonelab serve                      # http://127.0.0.1:8791/
 python3 -m phonelab cua demo --driver /path/to/cua-driver --duration 300 --tap-every 8
 ```
 
-Add `--serial S` to every command when more than one device is attached.
+Other agents' emulators and phones can share the machine: phone-lab never
+picks an `emulator-*` device on its own, and with several phones attached
+it asks you to choose with `--serial S`, `--model "Pixel 10 Pro Fold"`, or
+`ANDROID_SERIAL`. Errors name models, never serials.
 
 - [docs/adr-001-tech-stack.md](docs/adr-001-tech-stack.md) — the stack decision
 - [docs/feature-map.md](docs/feature-map.md) — features, modules, tests, proof, status

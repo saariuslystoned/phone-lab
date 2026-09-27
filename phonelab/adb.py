@@ -1,9 +1,11 @@
-"""Thin ADB wrapper: single-device selection, redaction, screencap."""
+"""Thin ADB wrapper: device selection on a shared machine, redaction, screencap."""
 from __future__ import annotations
 
+import os
 import subprocess
 
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+EMULATOR_PREFIX = "emulator-"
 
 
 class AdbError(Exception):
@@ -11,7 +13,11 @@ class AdbError(Exception):
 
 
 def parse_devices(text: str) -> list[dict[str, str]]:
-    """Parse `adb devices -l`; only authorized (`device`) rows count."""
+    """Parse `adb devices -l`; only authorized (`device`) rows count.
+
+    Each row carries `serial`, `model` (underscores to spaces) and `kind`:
+    `emulator` for the Android emulator's `emulator-<port>` serials, else `physical`.
+    """
     rows = []
     for line in text.splitlines()[1:]:
         parts = line.split()
@@ -23,15 +29,35 @@ def parse_devices(text: str) -> list[dict[str, str]]:
                 key, value = token.split(":", 1)
                 row[key] = value
         row["model"] = row.get("model", "unknown").replace("_", " ")
+        row["kind"] = "emulator" if row["serial"].startswith(EMULATOR_PREFIX) else "physical"
         rows.append(row)
     return rows
 
 
+def normalize_model(name: str) -> str:
+    return name.replace("_", " ").strip().casefold()
+
+
+def describe(devices: list[dict[str, str]]) -> str:
+    """Models and kinds only; never a serial."""
+    return ", ".join(f"{d['model']} ({d['kind']})" for d in devices) or "none"
+
+
 class Adb:
-    def __init__(self, serial: str | None = None, adb: str = "adb") -> None:
+    """One device. Selection order: explicit serial, `ANDROID_SERIAL`, then the single physical device.
+
+    Other agents may share the machine with emulators and phones of their own, so emulators are never
+    chosen implicitly (`allow_emulators=True` opts in) and `model` narrows the choice by name.
+    """
+
+    def __init__(self, serial: str | None = None, adb: str = "adb", model: str | None = None,
+                 allow_emulators: bool = False) -> None:
         self.adb = adb
-        self.serial = serial
+        self.serial = serial or os.environ.get("ANDROID_SERIAL") or None
+        self.wanted_model = model
+        self.allow_emulators = allow_emulators
         self.model = "unknown"
+        self.kind: str | None = None
 
     def redact(self, text: str) -> str:
         return text.replace(self.serial, "<serial>") if self.serial else text
@@ -48,17 +74,31 @@ class Adb:
         return [self.adb] + (["-s", self.serial] if self.serial else [])
 
     def resolve(self) -> "Adb":
-        """Pick the single authorized device, or verify the requested one."""
+        """Pick the device, or verify the requested one. Error messages name models, never serials."""
         devices = parse_devices(self._run([self.adb, "devices", "-l"], 15).stdout)
         if self.serial:
-            devices = [d for d in devices if d["serial"] == self.serial]
-            if not devices:
-                raise AdbError("the requested device is not attached or not authorized")
-        elif not devices:
-            raise AdbError("no authorized device attached")
-        elif len(devices) > 1:
-            raise AdbError(f"{len(devices)} authorized devices attached; pass --serial")
-        self.serial, self.model = devices[0]["serial"], devices[0]["model"]
+            match = [d for d in devices if d["serial"] == self.serial]
+            if not match:
+                raise AdbError(f"the requested device is not attached or not authorized; seen: {describe(devices)}")
+            chosen = match[0]
+        else:
+            pool = devices
+            if self.wanted_model:
+                pool = [d for d in pool if normalize_model(d["model"]) == normalize_model(self.wanted_model)]
+            if not self.allow_emulators:
+                pool = [d for d in pool if d["kind"] == "physical"]
+            what = ("device" if self.allow_emulators else "physical device") + (
+                f" with model {self.wanted_model!r}" if self.wanted_model else "")
+            if not pool:
+                hint = ""
+                if not self.allow_emulators and any(d["kind"] == "emulator" for d in devices):
+                    hint = " (emulators are ignored unless --allow-emulators or --serial is given)"
+                raise AdbError(f"no authorized {what} attached; seen: {describe(devices)}{hint}")
+            if len(pool) > 1:
+                raise AdbError(f"{len(pool)} authorized {what}s attached: {describe(pool)}; "
+                               "pass --serial, --model, or set ANDROID_SERIAL")
+            chosen = pool[0]
+        self.serial, self.model, self.kind = chosen["serial"], chosen["model"], chosen["kind"]
         return self
 
     def shell(self, *args: str, timeout: float = 15) -> str:

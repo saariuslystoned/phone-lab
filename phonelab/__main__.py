@@ -18,26 +18,28 @@ DEFAULT_RUNS_DIR = "runs/phone-lab-runs"
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="phonelab", description="phone-lab: watch and drive Android displays.")
     sub = parser.add_subparsers(dest="command", required=True)
+    device = argparse.ArgumentParser(add_help=False)
+    device.add_argument("--serial", help="device serial; also read from ANDROID_SERIAL")
+    device.add_argument("--model", help='pick the device by model name, e.g. "Pixel 10 Pro Fold"')
+    device.add_argument("--allow-emulators", action="store_true",
+                        help="let an emulator-* device be chosen implicitly (never the default on a shared machine)")
 
-    inv = sub.add_parser("inventory", help="print every display as JSON")
-    inv.add_argument("--serial", help="device serial (only needed with several devices attached)")
+    sub.add_parser("inventory", help="print every display as JSON", parents=[device])
 
-    srv = sub.add_parser("serve", help="run the live multi-display viewer")
+    srv = sub.add_parser("serve", help="run the live multi-display viewer", parents=[device])
     srv.add_argument("--host", default="127.0.0.1")
     srv.add_argument("--port", type=int, default=8791)
-    srv.add_argument("--serial")
     srv.add_argument("--runs-dir", default=DEFAULT_RUNS_DIR)
     srv.add_argument("--max-height", type=int, default=1000, help="preview JPEG height cap")
 
     cua = sub.add_parser("cua", help="cua-driver helpers")
     cua_sub = cua.add_subparsers(dest="cua_command", required=True)
-    demo = cua_sub.add_parser("demo", help="drive the synthetic fixture on a Cua display")
+    demo = cua_sub.add_parser("demo", help="drive the synthetic fixture on a Cua display", parents=[device])
     demo.add_argument("--driver", default=os.environ.get("PHONELAB_CUA_DRIVER"),
                       help="path to the cua-driver binary (or set PHONELAB_CUA_DRIVER)")
     demo.add_argument("--duration", type=int, default=300, help="seconds to keep the session alive")
     demo.add_argument("--tap-every", type=float, default=8.0, help="seconds between increment taps")
     demo.add_argument("--no-taps", action="store_true")
-    demo.add_argument("--serial")
     demo.add_argument("--runs-dir", default=DEFAULT_RUNS_DIR)
     return parser
 
@@ -48,7 +50,7 @@ def main(argv: list[str] | None = None) -> int:
         print("error: --driver PATH (or PHONELAB_CUA_DRIVER) is required", file=sys.stderr)
         return 2
     try:
-        adb = Adb(args.serial).resolve()
+        adb = Adb(args.serial, model=args.model, allow_emulators=args.allow_emulators).resolve()
     except AdbError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2

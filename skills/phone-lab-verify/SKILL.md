@@ -71,7 +71,9 @@ python3 skills/phone-lab-verify/scripts/verify.py --base-url http://127.0.0.1:87
 ```
 
 Exit 0 = pass, 1 = fail, 2 = setup problem (server unreachable, serial
-ambiguous). The JSON verdict is `{"result", "checks": [...], "numbers": {...}}`.
+ambiguous). Emulators are ignored unless `--allow-emulators`; with several
+phones attached pass `--serial`, `--model "Pixel 10 Pro Fold"`, or set
+`ANDROID_SERIAL`. The JSON verdict is `{"result", "checks": [...], "numbers": {...}}`.
 
 ## Recording results
 
