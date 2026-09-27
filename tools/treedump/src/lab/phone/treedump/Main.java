@@ -630,7 +630,9 @@ public class Main {
                     }
                     intCount++;
                 } else if (p == boolean.class || p == Boolean.class) {
-                    toastArgs[i] = false;
+                    // isUiContext: a toast from a non-UI context is redirected to the default display,
+                    // and this toast must land on the requested display.
+                    toastArgs[i] = true;
                 } else {
                     toastArgs[i] = null;
                 }

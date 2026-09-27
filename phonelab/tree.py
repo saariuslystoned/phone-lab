@@ -241,7 +241,13 @@ class TreeDumper:
 
     def _tree_once(self, logical_id: int) -> dict:
         self._send_line(f"tree {logical_id}")
-        return self._read_reply(timeout=self.timeout)
+        reply = self._read_reply(timeout=self.timeout)
+        if reply.get("ok") and not reply.get("windows") and not reply.get("nodes"):
+            # Right after connecting, the accessibility window cache can be empty for a moment; ask once more.
+            time.sleep(0.3)
+            self._send_line(f"tree {logical_id}")
+            reply = self._read_reply(timeout=self.timeout)
+        return reply
 
     def tree(self, logical_id: int) -> dict:
         """one `tree` round-trip; restarts the process once on EOF/timeout, then raises TreeError."""

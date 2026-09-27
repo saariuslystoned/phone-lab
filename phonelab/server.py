@@ -15,8 +15,11 @@ from PIL import Image, ImageDraw, ImageFont
 
 from .adb import Adb
 from .capture import CaptureManager, Frame
+from .cua import CuaDriver, CuaError
 from .displays import Display
+from .refs import assign_refs, find, tap_point
 from .sessions import Registry
+from .tree import TreeDumper, TreeError
 
 UI_PATH = Path(__file__).resolve().parent / "ui" / "index.html"
 SCHEMA = "phone-lab.freeze.v1"
@@ -162,12 +165,16 @@ class ViewerServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
 
-    def __init__(self, address: tuple[str, int], adb: Adb, manager: CaptureManager, device: dict, runs_dir: Path) -> None:
+    def __init__(self, address: tuple[str, int], adb: Adb, manager: CaptureManager, device: dict, runs_dir: Path,
+                 dumper: TreeDumper | None = None, driver: CuaDriver | None = None) -> None:
         super().__init__(address, ViewerHandler)
         self.adb = adb
         self.manager = manager
         self.device = device
         self.runs_dir = Path(runs_dir)
+        self.dumper = dumper
+        self.driver = driver
+        self.trees: dict[int, dict] = {}
 
 
 class ViewerHandler(BaseHTTPRequestHandler):
@@ -187,8 +194,8 @@ class ViewerHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def _json(self, payload, status: int = 200) -> None:
-        self._send(status, json.dumps(payload).encode(), "application/json")
+    def _json(self, payload, status: int = 200, extra: dict[str, str] | None = None) -> None:
+        self._send(status, json.dumps(payload).encode(), "application/json", extra=extra)
 
     def do_GET(self) -> None:
         path = urlsplit(self.path).path
@@ -196,10 +203,41 @@ class ViewerHandler(BaseHTTPRequestHandler):
             self._send(200, UI_PATH.read_bytes(), "text/html; charset=utf-8")
         elif path == "/api/state":
             state = self.server.manager.state()
+            tree_info = {
+                "available": self.server.dumper is not None,
+                "hello": getattr(self.server.dumper, "hello", None) if self.server.dumper else None,
+                "restarts": getattr(self.server.dumper, "restarts", 0) if self.server.dumper else 0,
+                "last_error": getattr(self.server.dumper, "last_error", None) if self.server.dumper else None,
+            }
             self._json({"device": self.server.device, "server_time": time.time(),
-                        "runs_dir": str(self.server.runs_dir), **state})
+                        "runs_dir": str(self.server.runs_dir), "tree": tree_info, **state})
         elif path == "/api/freezes":
             self._json(recent_freezes(self.server.runs_dir))
+        elif path.startswith("/api/tree/"):
+            match = re.fullmatch(r"/api/tree/(\d+)", path)
+            if not match:
+                self._json({"error": "not found"}, 404)
+                return
+            logical_id = int(match.group(1))
+            if self.server.dumper is None:
+                self._json({"error": "treedump not configured"}, 503)
+                return
+            try:
+                reply = self.server.dumper.tree(logical_id)
+            except TreeError as exc:
+                self._json({"error": self.server.adb.redact(str(exc))}, 503)
+                return
+            if not reply.get("ok"):
+                self._json({"ok": False, "error": self.server.adb.redact(reply.get("error", "display has no windows"))}, 404)
+                return
+            assign_refs(reply)
+            displays = self.server.manager.state().get("displays", [])
+            reply["display"] = next((d for d in displays if d.get("logical_id") == logical_id), None)
+            self.server.trees[logical_id] = reply
+            extra = {}
+            if "cost_ms" in reply:
+                extra["X-Tree-Cost-Ms"] = str(reply["cost_ms"])
+            self._json(reply, 200, extra=extra)
         elif path.startswith("/frame/") and path.endswith(".jpg"):
             frame = self.server.manager.frame(unquote(path[len("/frame/"):-len(".jpg")]))
             if frame is None:
@@ -216,17 +254,206 @@ class ViewerHandler(BaseHTTPRequestHandler):
                 self._json(freeze(self.server.manager, self.server.device, self.server.runs_dir))
             except Exception as exc:  # report, never crash the server thread
                 self._json({"error": self.server.adb.redact(f"freeze failed: {exc}")}, 500)
+        elif path == "/api/tap":
+            t0 = time.time()
+            content_length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(content_length) if content_length > 0 else b""
+            try:
+                data = json.loads(body) if body else {}
+            except Exception:
+                self._json({"ok": False, "reason": "invalid json"}, 400)
+                return
+
+            logical_id = data.get("logical_id")
+            ref = data.get("ref")
+            if logical_id is None:
+                self._json({"ok": False, "reason": "missing logical_id"}, 400)
+                return
+            try:
+                logical_id = int(logical_id)
+            except (ValueError, TypeError):
+                self._json({"ok": False, "reason": "invalid logical_id"}, 400)
+                return
+
+            displays = self.server.manager.state().get("displays", [])
+            matching = next((d for d in displays if d.get("logical_id") == logical_id), None)
+            if matching is None or matching.get("role") != "agent":
+                self._json({"ok": False, "reason": "not an agent display"}, 400)
+                return
+
+            session = self.server.manager.registry.by_display().get(logical_id)
+            if session is None or session.state != "active" or not session.target_id:
+                self._json({"ok": False, "reason": f"no phone-lab session on display {logical_id}"}, 400)
+                return
+
+            if self.server.driver is None:
+                self._json({"ok": False, "reason": "no cua-driver"}, 400)
+                return
+
+            if self.server.dumper is None:
+                self._json({"ok": False, "reason": "no treedumper configured"}, 503)
+                return
+
+            try:
+                tree = self.server.dumper.tree(logical_id)
+            except TreeError as exc:
+                self._json({"ok": False, "reason": self.server.adb.redact(str(exc))}, 503)
+                return
+
+            if not tree.get("ok"):
+                self._json({"ok": False, "reason": "ref not found"}, 400)
+                return
+
+            assign_refs(tree)
+            self.server.trees[logical_id] = tree
+            node = find(tree, ref) if ref else None
+            if node is None:
+                self._json({"ok": False, "reason": "ref not found"}, 400)
+                return
+
+            x, y = tap_point(node)
+            sid = session.session_id
+            target = session.target_id
+            stale_retries = 0
+            snapshot_id = None
+            frame_age_ms = None
+            result = None
+
+            while True:
+                try:
+                    snap = self.server.driver.snapshot(sid, target)
+                    snap_data = snap.get("data", {})
+                    snapshot_id = snap_data.get("snapshot_id")
+                    frame_age_ms = snap_data.get("frame_age_ms")
+                    self.server.driver.tap(sid, snapshot_id, x, y)
+                    result = "ok"
+                    break
+                except CuaError as exc:
+                    if exc.reason in ("frame_stale", "stale_snapshot") and stale_retries < 3:
+                        stale_retries += 1
+                        continue
+                    result = f"refused:{exc.reason}" if exc.status == "refused" else f"error:{exc.reason}"
+                    break
+
+            now = time.time()
+            session.last_action = {
+                "kind": "tap ref",
+                "at": now,
+                "result": result,
+                "detail": {
+                    "ref": ref,
+                    "x": x,
+                    "y": y,
+                    "frame_age_ms": frame_age_ms,
+                    "stale_retries": stale_retries,
+                },
+            }
+            session.updated_at = now
+            self.server.manager.registry.write(session)
+
+            if result != "ok":
+                self._json({"ok": False, "reason": result}, 502)
+                return
+
+            cost_ms = round((time.time() - t0) * 1000)
+            tree_cost_ms = tree.get("cost_ms", 0)
+            self._json({
+                "ok": True,
+                "logical_id": logical_id,
+                "ref": ref,
+                "x": x,
+                "y": y,
+                "session_id": sid,
+                "snapshot_id": snapshot_id,
+                "frame_age_ms": frame_age_ms,
+                "stale_retries": stale_retries,
+                "tree_cost_ms": tree_cost_ms,
+                "cost_ms": cost_ms,
+            })
+        elif path.startswith("/api/tree/") and path.endswith("/act"):
+            match = re.fullmatch(r"/api/tree/(\d+)/act", path)
+            if not match:
+                self._json({"error": "not found"}, 404)
+                return
+            logical_id = int(match.group(1))
+
+            displays = self.server.manager.state().get("displays", [])
+            matching = next((d for d in displays if d.get("logical_id") == logical_id), None)
+            if matching is None or matching.get("role") != "agent":
+                self._json({"ok": False, "error": "not an agent display"}, 400)
+                return
+
+            if self.server.dumper is None:
+                self._json({"ok": False, "error": "treedump not configured"}, 503)
+                return
+
+            content_length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(content_length) if content_length > 0 else b""
+            try:
+                data = json.loads(body) if body else {}
+            except Exception:
+                self._json({"ok": False, "error": "invalid json"}, 400)
+                return
+
+            action = data.get("action")
+            if action == "toast":
+                text = data.get("text", "")
+                try:
+                    reply = dict(self.server.dumper.toast(logical_id, text))
+                except TreeError as exc:
+                    self._json({"ok": False, "error": self.server.adb.redact(str(exc))}, 503)
+                    return
+                reply["logical_id"] = logical_id
+                self._json(reply)
+            elif action in ("focus", "click"):
+                ref = data.get("ref")
+                if not ref:
+                    self._json({"ok": False, "error": "missing ref"}, 400)
+                    return
+                tree = self.server.trees.get(logical_id)
+                if not tree:
+                    self._json({"ok": False, "error": f"no tree cached for display {logical_id}"}, 400)
+                    return
+                node = find(tree, ref)
+                if not node:
+                    self._json({"ok": False, "error": f"ref not found: {ref}"}, 400)
+                    return
+                node_index = node.get("i")
+                if node_index is None:
+                    self._json({"ok": False, "error": "node has no index"}, 400)
+                    return
+                try:
+                    reply = dict(self.server.dumper.act(logical_id, node_index, action))
+                except TreeError as exc:
+                    self._json({"ok": False, "error": self.server.adb.redact(str(exc))}, 503)
+                    return
+                reply["logical_id"] = logical_id
+                self._json(reply)
+            else:
+                self._json({"ok": False, "error": f"unknown action: {action}"}, 400)
         else:
             self._json({"error": "not found"}, 404)
 
 
 def serve(adb: Adb, registry: Registry, host: str = "127.0.0.1", port: int = 8791,
-          runs_dir: Path = Path("runs/phone-lab-runs"), max_height: int = 1000) -> None:
+          runs_dir: Path = Path("runs/phone-lab-runs"), max_height: int = 1000,
+          driver: Path | None = None, treedump_jar: Path | None = None) -> None:
     """Run the viewer until Ctrl-C; capture threads start immediately."""
     device = {"model": adb.model, **adb.props()}
     manager = CaptureManager(adb, registry, max_height=max_height)
     manager.start()
-    server = ViewerServer((host, port), adb, manager, device, Path(runs_dir))
+    dumper: TreeDumper | None = None
+    if treedump_jar is not None:
+        try:
+            d = TreeDumper(adb, Path(treedump_jar))
+            hello = d.start()
+            print(adb.redact(json.dumps(hello)), flush=True)
+            dumper = d
+        except TreeError as exc:
+            print(adb.redact(f"treedump start failed: {exc}"), flush=True)
+            dumper = None
+    cua_driver = CuaDriver(adb, Path(driver)) if driver is not None else None
+    server = ViewerServer((host, port), adb, manager, device, Path(runs_dir), dumper=dumper, driver=cua_driver)
     print(f"phone-lab viewer on http://{host}:{port}/ · {device['model']} · Android {device['android_release']} · runs {runs_dir}", flush=True)
     try:
         server.serve_forever(poll_interval=0.5)
@@ -235,4 +462,9 @@ def serve(adb: Adb, registry: Registry, host: str = "127.0.0.1", port: int = 879
     finally:
         server.server_close()
         manager.stop()
+        if dumper is not None:
+            try:
+                dumper.stop()
+            except Exception:
+                pass
         print("phone-lab viewer stopped", flush=True)
