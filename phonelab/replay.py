@@ -6,6 +6,7 @@ import hashlib
 import io
 import json
 import os
+import shlex
 import time
 from collections import defaultdict
 from pathlib import Path
@@ -31,6 +32,8 @@ from phonelab.trails import (
     parse_script,
     save_trail,
 )
+
+AM_START_TIMEOUT_S = 60  # `am start -W` waits for the launch; a cold debug build can pass adb's 15 s default
 
 RECORDED_NODE_KEYS = (
     "i",
@@ -88,7 +91,7 @@ class Backend(Protocol):
     def screencap(self, sf_id: str) -> bytes | None: ...
     def tree(self, logical_id: int) -> dict: ...
     def act(self, logical_id: int, node_index: int, action: str) -> dict: ...
-    def shell(self, *args: str) -> str: ...
+    def shell(self, *args: str, timeout: float = 15) -> str: ...
     def fixture_state(self) -> dict | None: ...
     def props(self) -> dict: ...
     def start(self) -> None: ...
@@ -97,31 +100,21 @@ class Backend(Protocol):
 
 class AdbBackend:
     def __init__(self, adb: Adb, driver_path: Path, treedump_jar: Path, apps: list[str] | tuple[str, ...] | None = None) -> None:
-        from phonelab.tree import DEFAULT_TEXT_PACKAGES, TreeDumper
+        from phonelab.tree import TreeDumper, packages_with
 
         self.adb = adb
         self.driver = CuaDriver(adb, driver_path)
         self.apps = list(apps or [])
-        all_pkgs = list(DEFAULT_TEXT_PACKAGES)
-        for app in self.apps:
-            if app not in all_pkgs:
-                all_pkgs.append(app)
-        self.dumper = TreeDumper(adb, treedump_jar, text_packages=tuple(all_pkgs), act_packages=tuple(all_pkgs))
+        pkgs = packages_with(self.apps)
+        self.dumper = TreeDumper(adb, treedump_jar, text_packages=pkgs, act_packages=pkgs)
 
     def add_apps(self, pkgs: Any) -> None:
-        from phonelab.tree import DEFAULT_TEXT_PACKAGES
-        added = False
-        for pkg in pkgs:
-            if pkg not in self.apps:
-                self.apps.append(pkg)
-                added = True
-        if added:
-            all_pkgs = list(DEFAULT_TEXT_PACKAGES)
-            for app in self.apps:
-                if app not in all_pkgs:
-                    all_pkgs.append(app)
-            self.dumper.text_packages = tuple(all_pkgs)
-            self.dumper.act_packages = tuple(all_pkgs)
+        from phonelab.tree import packages_with
+
+        merged = packages_with(self.apps + list(pkgs))
+        self.apps = list(dict.fromkeys(self.apps + list(pkgs)))
+        self.dumper.text_packages = merged
+        self.dumper.act_packages = merged
 
     def inventory(self) -> list[Display]:
         return inventory(self.adb)
@@ -138,8 +131,8 @@ class AdbBackend:
     def act(self, logical_id: int, node_index: int, action: str) -> dict:
         return self.dumper.act(logical_id, node_index, action)
 
-    def shell(self, *args: str) -> str:
-        return self.adb.shell(*args)
+    def shell(self, *args: str, timeout: float = 15) -> str:
+        return self.adb.shell(*args, timeout=timeout)
 
     def fixture_state(self) -> dict | None:
         try:
@@ -693,8 +686,12 @@ class Runner:
         writer: RunWriter,
         *,
         derive: bool = False,
+        recording: bool | None = None,
         total_steps: int = 1,
     ) -> tuple[dict, dict | None]:
+        # `derive` is about the predicate; `recording` is about resolving labels and storing the node.
+        if recording is None:
+            recording = derive
         started_at = time.time()
         step_dir = writer.step_dir(index)
 
@@ -748,7 +745,7 @@ class Runner:
             label = step.action.get("label")
             ref = step.action.get("ref", "")
             if not ref and label:
-                if derive:
+                if recording:
                     if not tree_before.get("ok"):
                         status = "fail"
                         message = f"label {label!r} cannot be resolved: tree read failed ({tree_before.get('error') or 'no refs'})"
@@ -768,7 +765,7 @@ class Runner:
 
             if status in ("ok", "healed"):
                 node = find(tree_before, ref)
-                if node is None and label and not derive and tree_before.get("ok"):
+                if node is None and label and not recording and tree_before.get("ok"):
                     # A step written by label keeps the author's intent: re-resolve it before the geometric
                     # heal, which needs the node's own label (a Compose EditText's label lives in a child).
                     from phonelab.refs import resolve_label
@@ -781,7 +778,13 @@ class Runner:
                         result_detail["heal"] = {
                             "status": "healed",
                             "ref": node.get("ref"),
-                            "note": {"kind": "healed", "reason": "label", "from": ref, "label": label},
+                            "note": {
+                                "kind": "healed",
+                                "reason": "label",
+                                "missing_ref": ref,
+                                "ref": node.get("ref"),
+                                "label": label,
+                            },
                         }
                 if node is None:
                     if not tree_before.get("ok") or "refs" not in tree_before:
@@ -816,7 +819,7 @@ class Runner:
                                 status = "fail"
                                 message = f"ref {ref} missing: {note['reason']} ({note['message']}); trees {recorded_file} and {current_file}"
                 else:
-                    if derive:
+                    if recording:
                         step.action["recorded"] = {k: node[k] for k in RECORDED_NODE_KEYS if k in node}
                     if kind == "tap":
                         tap_x, tap_y = tap_point(node)
@@ -825,7 +828,7 @@ class Runner:
                             "label": label_of(node),
                             "resource_id": node.get("id"),
                         }
-                        if derive:
+                        if recording:
                             step.action["hint"] = hint
                             id_part = (node.get("id") or "").split("/")[-1]
                             if id_part and (step.name == f"tap {ref}" or step.name == "tap increment"):
@@ -859,12 +862,20 @@ class Runner:
                                 am_cmd.extend(["--ei", k, str(v)])
                             elif isinstance(v, str):
                                 am_cmd.extend(["--es", k, v])
-                        self.backend.shell(*am_cmd)
+                        # adb joins the argv with spaces for the device shell: quote every argument.
+                        am_out = self.backend.shell(*[shlex.quote(a) for a in am_cmd], timeout=AM_START_TIMEOUT_S)
+                        am_lines = [ln.strip() for ln in (am_out or "").splitlines()]
+                        am_errors = [ln for ln in am_lines if ln.startswith("Error")]
+                        am_status = [ln for ln in am_lines if ln.startswith("Status:")]
+                        if am_errors:
+                            raise RuntimeError(f"am start failed: {am_errors[-1]}")
+                        if am_status and am_status[-1].split(":", 1)[1].strip() != "ok":
+                            raise RuntimeError(f"am start failed: {am_status[-1]}")
                         self.target_id = None
                         if self.session_record:
                             self.session_record.package = pkg
                             self.session_record.target_id = None
-                        action_detail.update({"package": pkg, "via": "am"})
+                        action_detail.update({"package": pkg, "via": "am", "extras": dict(extras)})
                         if activity:
                             action_detail["activity"] = activity
                     else:
@@ -876,7 +887,7 @@ class Runner:
                         if self.session_record:
                             self.session_record.package = pkg
                             self.session_record.target_id = self.target_id
-                        action_detail.update({"package": pkg})
+                        action_detail.update({"package": pkg, "via": "cua"})
                         if activity:
                             action_detail["activity"] = activity
                 elif kind == "tap":
@@ -901,13 +912,16 @@ class Runner:
                                     continue
                                 raise
                         action_detail.update({
+                            "via": "cua",
                             "x": tap_x,
                             "y": tap_y,
                             "snapshot_id": snap_id,
                             "package": self.session_record.package if self.session_record else None,
                         })
                 elif kind == "set_text":
-                    self.backend.act(display_id, node_index, "focus")
+                    focus = self.backend.act(display_id, node_index, "focus")
+                    if not focus.get("ok") or focus.get("performed") is False:
+                        raise RuntimeError(f"focus failed: {focus.get('error') or 'not performed'}; text not typed")
                     if step.action.get("clear_first", True):
                         self.backend.shell("input", "-d", str(display_id), "keycombination", "KEYCODE_CTRL_LEFT", "KEYCODE_A")
                         self.backend.shell("input", "-d", str(display_id), "keyevent", "KEYCODE_DEL")
@@ -937,6 +951,7 @@ class Runner:
                 elif kind == "resize":
                     size = step.action.get("size")
                     density = step.action.get("density")
+                    self.resized_displays.add(display_id)
                     if size == "reset":
                         self.backend.shell("wm", "size", "reset", "-d", str(display_id))
                         self.backend.shell("wm", "density", "reset", "-d", str(display_id))
@@ -944,7 +959,6 @@ class Runner:
                         self.backend.shell("wm", "size", size, "-d", str(display_id))
                         if density is not None:
                             self.backend.shell("wm", "density", str(density), "-d", str(display_id))
-                    self.resized_displays.add(display_id)
                     action_detail.update({"size": size, "density": density, "display_id": display_id})
             except CuaError as exc:
                 status = "refused" if exc.status == "refused" else "error"
@@ -952,6 +966,8 @@ class Runner:
             except Exception as exc:
                 status = "error"
                 message = str(exc)
+        if kind in ("tap", "set_text") and step.action.get("label") and action_detail:
+            action_detail["label"] = step.action["label"]
         phase_action_ms = round((time.time() - t_act0) * 1000)
 
         if kind == "tap":
@@ -1214,6 +1230,7 @@ def record(
                 step,
                 writer,
                 derive=not item.get("explicit_predicate"),
+                recording=True,
                 total_steps=len(parsed_steps),
             )
             step.predicate = used_pred

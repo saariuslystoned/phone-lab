@@ -13,7 +13,6 @@ from typing import Any
 TRAIL_SCHEMA = "phone-lab.trail.v1"
 ACTION_KINDS = ("launch", "tap", "set_text", "key", "swipe", "wait_for", "sleep", "resize")
 PREDICATE_KINDS = ("fixture_counter", "text_present", "ref_present", "ref_absent")
-ALLOWED_PACKAGES = ("ai.cua.fixture.notes", "ai.cua.android.demo")
 PACKAGE_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+$")
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,59}$")
 DEFAULT_TIMEOUT_MS = 5000

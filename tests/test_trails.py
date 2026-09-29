@@ -7,7 +7,6 @@ import unittest
 from pathlib import Path
 
 from phonelab.trails import (
-    ALLOWED_PACKAGES,
     DEFAULT_TIMEOUT_MS,
     Step,
     Trail,

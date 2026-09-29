@@ -170,7 +170,7 @@ class FakeBackend:
     def act(self, logical_id: int, node_index: int, action: str) -> dict:
         return {"ok": True}
 
-    def shell(self, *args: str) -> str:
+    def shell(self, *args: str, timeout: float = 15) -> str:
         self.shell_calls.append(tuple(args))
         if len(args) >= 3 and args[0] == "am" and args[1] == "force-stop":
             self.counter = 0

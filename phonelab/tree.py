@@ -10,6 +10,7 @@ import time
 from pathlib import Path
 
 from .adb import Adb
+from .trails import PACKAGE_RE
 
 REMOTE_DIR = "/data/local/tmp/phonelab"
 DEFAULT_TEXT_PACKAGES = ("ai.cua.fixture.notes", "ai.cua.android.demo")
@@ -19,6 +20,17 @@ CONNECT_RETRY_S = 0.7
 
 class TreeError(Exception):
     """treedump error. Message is redacted."""
+
+
+def packages_with(apps=()) -> tuple[str, ...]:
+    """DEFAULT_TEXT_PACKAGES plus `apps`, in order, no duplicates; TreeError on a malformed package name."""
+    pkgs = list(DEFAULT_TEXT_PACKAGES)
+    for app in apps or ():
+        if not isinstance(app, str) or not PACKAGE_RE.fullmatch(app):
+            raise TreeError(f"package {app!r} not a valid package name")
+        if app not in pkgs:
+            pkgs.append(app)
+    return tuple(pkgs)
 
 
 def parse_reply(line: str) -> dict:
@@ -271,6 +283,7 @@ class TreeDumper:
                         self._start_process()
                         break
                     except TreeError:
+                        self._stop_process()
                         if attempt == CONNECT_ATTEMPTS - 1:
                             raise
                         time.sleep(CONNECT_RETRY_S)
