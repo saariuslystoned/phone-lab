@@ -25,8 +25,10 @@ phone-lab is a public MIT repo. These rules apply to every agent and worker.
   after any posture change. SurfaceFlinger ids (for `screencap -d`) and
   logical ids (for `input -d`, Cua `display_id`) are different namespaces;
   join them on `uniqueId`.
-- Drive only Cua's synthetic apps (`ai.cua.fixture.notes`,
-  `ai.cua.android.demo`) unless Bobby approves another app explicitly.
+- Agents may drive any app on these test devices. The code still limits
+  trails, tree text, and tap-by-ref to the two Cua fixture packages
+  (`ai.cua.fixture.notes`, `ai.cua.android.demo`); widening that is a code
+  change, not a policy one.
 - Never change security settings, bypass Play Protect, or dismiss a PIN
   keyguard. A swipe-only keyguard may be dismissed with a swipe.
 - Cua integration build: worktree `~/Developer/worktrees/cua-bobby-jellyware`

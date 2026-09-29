@@ -16,7 +16,6 @@ phone-lab", "prove the viewer", "run the slice check".
 - Display 0 is the human's screen. Its frames, freezes and browser
   screenshots stay under the git-ignored `runs/` directory. Publish only
   text proof (`proof/<slice>/PROOF.md`) that cites those paths.
-- Drive only `ai.cua.fixture.notes` and `ai.cua.android.demo`.
 
 ## Loop
 
