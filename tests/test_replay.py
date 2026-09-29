@@ -15,10 +15,10 @@ from PIL import Image
 from phonelab.cua import CuaError
 from phonelab.displays import Display
 from phonelab.refs import assign_refs
-from phonelab.replay import AdbBackend, Runner, _make_skipped_step, capture_all, record, replay, to_tree_doc
+from phonelab.replay import AdbBackend, RunWriter, Runner, _make_skipped_step, capture_all, record, replay, to_tree_doc
 from phonelab.sessions import Registry
 from phonelab.trace import list_runs, load_run, load_step
-from phonelab.trails import Trail, load_trail, save_trail
+from phonelab.trails import Step, Trail, load_trail, save_trail
 
 FIXTURE_TRAIL_PATH = Path(__file__).parent / "fixtures" / "trail_fixture_five.json"
 FIXTURE_TREE_PATH = Path(__file__).parent / "fixtures" / "tree_cua_fixture.json"
@@ -69,7 +69,7 @@ class FakeDriver:
             },
         }
 
-    def launch(self, sid: str, package: str) -> dict:
+    def launch(self, sid: str, package: str, activity: str | None = None) -> dict:
         self.calls.append(("launch", sid, package))
         return {
             "status": "ok",
@@ -118,6 +118,8 @@ class FakeBackend:
         self.stop_count = 0
         self.inventory_calls = 0
         self.raise_inventory_after_open_session = False
+        self.shell_calls: list[tuple[str, ...]] = []
+        self.added_apps: list[str] = []
 
     def inventory(self) -> list[Display]:
         self.inventory_calls += 1
@@ -169,9 +171,13 @@ class FakeBackend:
         return {"ok": True}
 
     def shell(self, *args: str) -> str:
+        self.shell_calls.append(tuple(args))
         if len(args) >= 3 and args[0] == "am" and args[1] == "force-stop":
             self.counter = 0
         return ""
+
+    def add_apps(self, pkgs: Any) -> None:
+        self.added_apps.extend(pkgs)
 
     def fixture_state(self) -> dict | None:
         return {
@@ -456,6 +462,245 @@ class ReplayUnitTests(unittest.TestCase):
             recs = registry.load_all()
             self.assertEqual(len(recs), 1)
             self.assertEqual(recs[0].state, "stopped")
+
+
+
+    def test_launch_with_extras_and_input_tap(self):
+        backend = FakeBackend()
+        with tempfile.TemporaryDirectory() as tmp:
+            runs_dir = Path(tmp) / "runs"
+            registry = Registry(runs_dir, "pixel-10-pro-fold")
+            runner = Runner(backend, registry, runs_dir)
+            runner.open_session(["com.example.app"], "test-session")
+
+            writer = RunWriter(
+                runs_dir=runs_dir,
+                run_id="run-launch-extras",
+                kind="record",
+                device=backend.props(),
+                trail_path_src=None,
+                trail_name="test-launch",
+                step_count=2,
+                source_run_id=None,
+                displays=backend.inventory(),
+                session=runner.session_record.to_json(),
+                command="record",
+                heal=None,
+            )
+            writer.begin()
+
+            step1 = Step(
+                name="launch with extras",
+                display="agent",
+                action={
+                    "kind": "launch",
+                    "package": "com.example.app",
+                    "activity": "com.example.app.MainActivity",
+                    "extras": {"flag": True, "num": 42, "text": "hello"},
+                },
+                predicate=None,
+            )
+            doc1, _ = runner.run_step(0, step1, writer, derive=False)
+            self.assertEqual(doc1["result"]["status"], "ok")
+            self.assertIsNone(runner.target_id)
+            self.assertEqual(doc1["action"]["detail"]["via"], "am")
+            self.assertEqual(doc1["action"]["detail"]["package"], "com.example.app")
+            self.assertEqual(doc1["action"]["detail"]["activity"], "com.example.app.MainActivity")
+
+            # Check am shell commands
+            am_calls = [c for c in backend.shell_calls if c[0] == "am"]
+            self.assertIn(("am", "force-stop", "com.example.app"), am_calls)
+            expected_start = (
+                "am", "start", "-W", "--display", "98", "-n",
+                "com.example.app/com.example.app.MainActivity",
+                "--ez", "flag", "true",
+                "--ei", "num", "42",
+                "--es", "text", "hello",
+            )
+            self.assertIn(expected_start, am_calls)
+
+            # Now step 2: tap when target_id is None -> input tap
+            step2 = Step(
+                name="tap increment",
+                display="agent",
+                action={"kind": "tap", "ref": "e7f67h"},
+                predicate=None,
+            )
+            doc2, _ = runner.run_step(1, step2, writer, derive=False)
+            self.assertEqual(doc2["result"]["status"], "ok")
+            self.assertEqual(doc2["action"]["detail"]["via"], "input")
+            input_calls = [c for c in backend.shell_calls if c[0] == "input" and len(c) >= 4 and c[3] == "tap"]
+            self.assertEqual(len(input_calls), 1)
+            self.assertEqual(input_calls[0][:4], ("input", "-d", "98", "tap"))
+            runner.close_session()
+
+    def test_resize_action_and_cleanup(self):
+        backend = FakeBackend()
+        with tempfile.TemporaryDirectory() as tmp:
+            runs_dir = Path(tmp) / "runs"
+            registry = Registry(runs_dir, "pixel-10-pro-fold")
+            runner = Runner(backend, registry, runs_dir)
+            runner.open_session(["ai.cua.fixture.notes"], "test-resize")
+
+            writer = RunWriter(
+                runs_dir=runs_dir,
+                run_id="run-resize",
+                kind="record",
+                device=backend.props(),
+                trail_path_src=None,
+                trail_name="test-resize",
+                step_count=3,
+                source_run_id=None,
+                displays=backend.inventory(),
+                session=runner.session_record.to_json(),
+                command="record",
+                heal=None,
+            )
+            writer.begin()
+
+            # 1. Resize to WxH with density
+            step1 = Step(
+                name="resize phone",
+                display="agent",
+                action={"kind": "resize", "size": "1080x1920", "density": 320},
+                predicate=None,
+            )
+            doc1, _ = runner.run_step(0, step1, writer, derive=False)
+            self.assertEqual(doc1["result"]["status"], "ok")
+            self.assertIn(98, runner.resized_displays)
+            self.assertIn(("wm", "size", "1080x1920", "-d", "98"), backend.shell_calls)
+            self.assertIn(("wm", "density", "320", "-d", "98"), backend.shell_calls)
+
+            # 2. Resize reset
+            step2 = Step(
+                name="reset display",
+                display="agent",
+                action={"kind": "resize", "size": "reset"},
+                predicate=None,
+            )
+            doc2, _ = runner.run_step(1, step2, writer, derive=False)
+            self.assertEqual(doc2["result"]["status"], "ok")
+            self.assertIn(("wm", "size", "reset", "-d", "98"), backend.shell_calls)
+            self.assertIn(("wm", "density", "reset", "-d", "98"), backend.shell_calls)
+
+            # 3. Resize again, then close_session() to test cleanup
+            step3 = Step(
+                name="resize custom",
+                display="agent",
+                action={"kind": "resize", "size": "720x1280"},
+                predicate=None,
+            )
+            doc3, _ = runner.run_step(2, step3, writer, derive=False)
+            self.assertEqual(doc3["result"]["status"], "ok")
+
+            backend.shell_calls.clear()
+            runner.close_session()
+
+            # Verify wm size/density reset were called in close_session before stop
+            self.assertIn(("wm", "size", "reset", "-d", "98"), backend.shell_calls)
+            self.assertIn(("wm", "density", "reset", "-d", "98"), backend.shell_calls)
+            self.assertEqual(len(runner.resized_displays), 0)
+
+    def test_record_resolves_tap_label_and_replay_uses_ref(self):
+        backend = FakeBackend()
+        script_pass = (
+            "launch ai.cua.fixture.notes\n"
+            "tap label:\"INCREMENT\"\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            runs_dir = Path(tmp) / "runs"
+            trails_dir = Path(tmp) / "trails"
+            registry = Registry(runs_dir, "pixel-10-pro-fold")
+
+            ret = record(backend, registry, runs_dir, trails_dir, "label-test", script_pass)
+            self.assertEqual(ret, 0)
+
+            trail_path = trails_dir / "label-test.json"
+            self.assertTrue(trail_path.is_file())
+            trail_data = json.loads(trail_path.read_text())
+            tap_step = trail_data["steps"][1]
+            # Verify ref was resolved and recorded/hint/label populated
+            self.assertEqual(tap_step["action"]["label"], "INCREMENT")
+            self.assertEqual(tap_step["action"]["ref"], "e7f67h")
+            self.assertIsNotNone(tap_step["action"].get("recorded"))
+            self.assertEqual(tap_step["action"].get("hint", {}).get("label"), "INCREMENT")
+
+            # Replay with the recorded trail
+            ret_rep = replay(backend, registry, runs_dir, trail_path)
+            self.assertEqual(ret_rep, 0)
+
+            # Test ambiguous or unresolvable label fails record
+            script_fail = (
+                "launch ai.cua.fixture.notes\n"
+                "tap label:\"Nonexistent Button\"\n"
+            )
+            ret_fail = record(backend, registry, runs_dir, trails_dir, "label-fail", script_fail)
+            self.assertEqual(ret_fail, 1)
+
+    def test_record_other_app_derives_no_fixture_predicates(self):
+        backend = FakeBackend()
+        with tempfile.TemporaryDirectory() as tmp:
+            runs_dir = Path(tmp) / "runs"
+            trails_dir = Path(tmp) / "trails"
+            registry = Registry(runs_dir, "pixel-10-pro-fold")
+            script = "launch com.example.other\ntap label:\"INCREMENT\"\n"
+            self.assertEqual(record(backend, registry, runs_dir, trails_dir, "other-app", script), 0)
+            data = json.loads((trails_dir / "other-app.json").read_text())
+            self.assertEqual(data["session"]["allow_apps"], ["com.example.other"])
+            for step in data["steps"]:
+                self.assertNotEqual((step.get("predicate") or {}).get("kind"), "fixture_counter")
+
+    def test_label_step_re_resolves_when_ref_is_gone(self):
+        from phonelab.trace import list_runs, load_step
+        backend = FakeBackend()
+        with tempfile.TemporaryDirectory() as tmp:
+            runs_dir = Path(tmp) / "runs"
+            trails_dir = Path(tmp) / "trails"
+            registry = Registry(runs_dir, "pixel-10-pro-fold")
+            self.assertEqual(record(backend, registry, runs_dir, trails_dir, "relabel",
+                                    "launch ai.cua.fixture.notes\ntap label:\"INCREMENT\"\n"), 0)
+            trail_path = trails_dir / "relabel.json"
+            data = json.loads(trail_path.read_text())
+            # The recorded node moved far and lost its own label (a Compose field whose label is a child).
+            data["steps"][1]["action"]["ref"] = "zzzzzz"
+            data["steps"][1]["action"]["recorded"]["text"] = ""
+            trail_path.write_text(json.dumps(data))
+            replay_runs = Path(tmp) / "replay-runs"
+            self.assertEqual(replay(backend, registry, replay_runs, trail_path), 0)
+            run_id = list_runs(replay_runs)[0]["run_id"]
+            step = load_step(replay_runs, run_id, 1)
+            self.assertEqual(step["result"]["status"], "healed")
+            self.assertIn("re-resolved by label 'INCREMENT' to e7f67h", step["result"]["message"])
+            self.assertEqual(step["result"]["detail"]["heal"]["note"]["reason"], "label")
+            self.assertEqual(step["action"]["detail"]["ref_used"], "e7f67h")
+
+    def test_backend_add_apps_and_cli_app(self):
+        from phonelab.__main__ import build_parser
+        parser = build_parser()
+
+        args = parser.parse_args(["tree", "0", "--app", "pkg.a", "--app", "pkg.b"])
+        self.assertEqual(args.app, ["pkg.a", "pkg.b"])
+
+        args = parser.parse_args(["serve", "--app", "pkg.c"])
+        self.assertEqual(args.app, ["pkg.c"])
+
+        args = parser.parse_args(["trail", "record", "-", "--name", "t", "--app", "pkg.d"])
+        self.assertEqual(args.app, ["pkg.d"])
+
+        args = parser.parse_args(["trail", "replay", "t.json", "--app", "pkg.e"])
+        self.assertEqual(args.app, ["pkg.e"])
+
+        backend = FakeBackend()
+        with tempfile.TemporaryDirectory() as tmp:
+            runs_dir = Path(tmp) / "runs"
+            trails_dir = Path(tmp) / "trails"
+            registry = Registry(runs_dir, "pixel-10-pro-fold")
+
+            script = "launch ai.cua.fixture.notes\n"
+            ret = record(backend, registry, runs_dir, trails_dir, "app-test", script, apps=["custom.app"])
+            self.assertEqual(ret, 0)
+            self.assertIn("custom.app", backend.added_apps)
+            self.assertIn("ai.cua.fixture.notes", backend.added_apps)
 
 
 if __name__ == "__main__":

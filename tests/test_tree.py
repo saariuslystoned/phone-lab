@@ -21,6 +21,10 @@ import sys
 args = sys.argv[1:]
 
 if "push" in args:
+    log = os.environ.get("FAKE_ADB_PUSH_LOG")
+    if log:
+        with open(log, "a") as f:
+            f.write("push\n")
     sys.exit(0)
 
 if "shell" in args:
@@ -199,6 +203,19 @@ class TreeDumperTests(unittest.TestCase):
             os.environ.pop("FAKE_ADB_CRASH_MARKER", None)
             if marker_file.exists():
                 marker_file.unlink()
+            dumper.stop()
+
+    def test_restart_without_start_pushes_the_jar(self):
+        push_log = Path(self.tmp.name) / "push.log"
+        os.environ["FAKE_ADB_PUSH_LOG"] = str(push_log)
+        dumper = TreeDumper(self.adb, self.jar, timeout=5.0)
+        try:
+            tree = dumper.tree(101)
+            self.assertTrue(tree["ok"])
+            self.assertEqual(dumper.restarts, 1)
+            self.assertEqual(push_log.read_text().count("push"), 1)
+        finally:
+            os.environ.pop("FAKE_ADB_PUSH_LOG", None)
             dumper.stop()
 
 

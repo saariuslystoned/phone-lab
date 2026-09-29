@@ -125,3 +125,38 @@ def tap_point(node: dict) -> tuple[int, int]:
     clamped_x = max(min_x, min(cx, max_x))
     clamped_y = max(min_y, min(cy, max_y))
     return (clamped_x, clamped_y)
+
+
+def resolve_label(tree: dict, label: str, *, action_kind: str = "tap") -> list[dict]:
+    """Find nodes matching label exactly, map each to nearest clickable (or editable) ancestor-or-self, and deduplicate."""
+    nodes = tree.get("nodes", [])
+    node_map = {n.get("i", idx): n for idx, n in enumerate(nodes)}
+    matching = [n for n in nodes if label_of(n) == label]
+
+    targets: list[dict] = []
+    seen_indices: set[int] = set()
+
+    for m in matching:
+        curr: dict | None = m
+        target: dict | None = None
+        while curr is not None:
+            if action_kind == "set_text":
+                if curr.get("editable"):
+                    target = curr
+                    break
+            else:
+                if curr.get("clickable"):
+                    target = curr
+                    break
+            p = curr.get("parent")
+            if p is None or p not in node_map:
+                break
+            curr = node_map[p]
+
+        if target is not None:
+            idx = target.get("i", id(target))
+            if idx not in seen_indices:
+                seen_indices.add(idx)
+                targets.append(target)
+
+    return targets

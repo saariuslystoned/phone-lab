@@ -50,6 +50,24 @@ device proof yet or the proof missed its target), `planned`.
 | Repair a missing ref from the nearest candidate within a bound (same class and label = moved; same label, other class = class_changed; ties within 10 px are ambiguous), with a `healed` note for the trail | `phonelab/heal.py` (`heal`, `HealResult`, `HealResult.to_json`); integration in `phonelab/replay.py` (`Runner.run_step` heal branch, `action.recorded`, `--max-heal-px`, `--cua-density`); contract in `plans/slice-5-self-heal.md` (`--max-heal-px`, `result.detail.heal`, `trees.heal`; hook is `replay.Runner.run_step`) | `tests/test_heal.py` (`HealTests`: `test_unchanged_tree_needs_no_heal`, `test_moved_60px_heals`, `test_class_changed_heals`, `test_inclusive_bound`, `test_custom_bound`); `tests/test_heal_replay.py` (`HealReplayTests.test_healed`, `test_disabled`, `test_no_recorded_node`) | Fold 2026-09-27: `heal-demo-replay-20260927-165012` at Cua density 380, two taps `healed` (`moved` 40 px, `e7f67h` → `d293z5`), run `pass`, 16.4 s; `proof/slice-5-self-heal/PROOF.md` | proven |
 | Anything outside the bound fails loudly with both trees attached (`no_candidate`, `out_of_bound`, `ambiguous`) | `phonelab/heal.py` (`heal` failed notes, `HealResult.evidence`) | `tests/test_heal.py` (`test_out_of_bound_fails`, `test_deleted_node_no_candidate`, `test_ambiguous_fails`, `test_trees_unchanged`); `tests/test_heal_replay.py` (`test_out_of_bound`) | Fold 2026-09-27: `heal-demo-replay-20260927-165031` at density 640, step 1 `fail` `out_of_bound` 340 px > 120, `trees.heal` recorded + current written, run `fail`; badge and heal note read in the trace viewer | proven |
 
+## Any-app trails (2026-09-29)
+
+Proven on the Fold with OpenClaw's Android debug build in its synthetic
+screenshot-fixture mode (no Gateway, no personal data); packet
+`proof/any-app-openclaw-20260929/PROOF.md`.
+
+| Feature | Modules / endpoints | Automated tests | Device proof | Status |
+|---|---|---|---|---|
+| Any package in trails (Android package-name check replaces the fixture allow-list); `record` allows only the packages the script launches | `phonelab/trails.py` (`PACKAGE_RE`), `phonelab/replay.py` `record` | `tests/test_trails.py::test_any_app_package_validation` | `runs/phone-lab-runs/openclaw-pr-proof-20260929/trails/oc-143466-resize.json`, `oc-155918-jump.json` | proven |
+| `--app PKG` on `tree`, `serve`, `trail record`, `trail replay` adds tree text and act access for that app | `phonelab/__main__.py`, `phonelab/server.py`, `phonelab/replay.py` (`AdbBackend.add_apps`) | `tests/test_replay.py::test_backend_add_apps_and_cli_app` | same trails (labels resolved from OpenClaw text) | proven |
+| `launch` with activity and intent extras through `am start -W --display <agent display>`; taps then go through `input -d` because Cua owns no task | `phonelab/trails.py`, `phonelab/replay.py` `Runner.run_step` | `test_launch_with_activity_and_extras`, `test_launch_with_extras_and_input_tap` | `runs/phone-lab-runs/openclaw-pr-proof-20260929/phonelab-runs/pixel-10-pro-fold/oc-155918-jump-*` (step 6 `via: input`) | proven |
+| `resize` action (`wm size`/`wm density -d`) on the agent display, reset on close | `phonelab/replay.py` `Runner.run_step`, `close_session` | `test_resize_action_and_script`, `test_resize_action_and_cleanup` | `runs/phone-lab-runs/openclaw-pr-proof-20260929/phonelab-runs/pixel-10-pro-fold/oc-143466-resize-replay-*` (nine live resizes, same task) | proven |
+| `tap label:"…"` / `set_text label:"…"` resolved at record time to one clickable or editable ancestor | `phonelab/refs.py` `resolve_label`, `phonelab/replay.py` | `test_tap_and_set_text_label_script`, `test_record_resolves_tap_label_and_replay_uses_ref` | both trails | proven |
+| A label step whose ref is gone re-resolves by label before the geometric heal (the geometric heal needs the node's own label; a Compose text field's label is a child) | `phonelab/replay.py` `Runner.run_step` | `test_label_step_re_resolves_when_ref_is_gone` | `oc-143466` head replay step 3, `oc-155918` head replay step 6 (`healed`, reason `label`) | proven |
+| Record-mode tap/launch predicates come from the fixture oracle only when the session app is the fixture | `phonelab/replay.py` `Runner._fixture_oracle` | `test_record_other_app_derives_no_fixture_predicates` | `oc-155918-jump` record (first attempt failed "counter stayed at 0") | proven |
+| treedump clears the UiAutomation node cache before every tree read | `tools/treedump/.../Main.java` `handleTree` | none (device behaviour) | `runs/phone-lab-runs/openclaw-pr-proof-20260929/events.jsonl` `stale-tree`: old jar missed a reopened drawer that `uiautomator dump` saw; new jar sees it | proven |
+| `TreeDumper.tree()` restart pushes the jar and retries the connect | `phonelab/tree.py` | `tests/test_tree.py::test_restart_without_start_pushes_the_jar` | `runs/phone-lab-runs/openclaw-pr-proof-20260929/events.jsonl` `no-push-on-restart`, `foreign-uiautomator` | proven |
+
 ## Shared machine (2026-09-27, proven with two phones)
 
 | Feature | Code | Tests | Proof | Status |
@@ -68,6 +86,15 @@ packet. Planned rows name the modules a slice will most likely touch so
 that reviewers can see where new code should land.
 
 ## Known limits
+
+- **Any-app limits (2026-09-29).** `screenrecord` records physical displays
+  only, so sub-second transitions on an agent display need a physical
+  display (OpenClaw's drawer timing was filmed on display 0). The
+  `phone-lab.tree.v1` trace tree drops `scrollable` and `editable`.
+  Android allows one UiAutomation client: another tool's `uiautomator dump`
+  on the same phone makes treedump reconnect (retried, not prevented).
+  Oracles exist only for the Cua fixture; other apps need explicit
+  `expect`/`wait_for` predicates.
 
 - **1–2 fps ceiling, and lower on busy human screens.** Capture is one
   `adb exec-out screencap -p` per frame. The Cua display (1080x1920, flat

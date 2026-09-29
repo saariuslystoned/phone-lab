@@ -13,6 +13,8 @@ from .adb import Adb
 
 REMOTE_DIR = "/data/local/tmp/phonelab"
 DEFAULT_TEXT_PACKAGES = ("ai.cua.fixture.notes", "ai.cua.android.demo")
+CONNECT_ATTEMPTS = 4
+CONNECT_RETRY_S = 0.7
 
 
 class TreeError(Exception):
@@ -250,7 +252,12 @@ class TreeDumper:
         return reply
 
     def tree(self, logical_id: int) -> dict:
-        """one `tree` round-trip; restarts the process once on EOF/timeout, then raises TreeError."""
+        """one `tree` round-trip; restarts the process once on EOF/timeout, then raises TreeError.
+
+        The restart pushes first (a caller that never called start() would otherwise run whatever jar
+        the device has) and retries the connect: only one UiAutomation client can hold the device, and
+        another tool's `uiautomator dump` can hold it for a moment (seen on the Fold, 2026-09-29).
+        """
         with self._lock:
             try:
                 return self._tree_once(logical_id)
@@ -258,7 +265,15 @@ class TreeDumper:
                 self._log(f"tree failed ({exc}); restarting process")
                 self.restarts += 1
                 self._stop_process()
-                self._start_process()
+                self.push()
+                for attempt in range(CONNECT_ATTEMPTS):
+                    try:
+                        self._start_process()
+                        break
+                    except TreeError:
+                        if attempt == CONNECT_ATTEMPTS - 1:
+                            raise
+                        time.sleep(CONNECT_RETRY_S)
                 return self._tree_once(logical_id)
 
     def act(self, logical_id: int, node_index: int, action: str) -> dict:

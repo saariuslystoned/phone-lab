@@ -17,6 +17,7 @@ from phonelab.trails import (
     parse_script,
     save_trail,
     trail_sha256,
+    validate_action,
 )
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "trail_fixture_five.json"
@@ -194,9 +195,72 @@ class TrailsUnitTests(unittest.TestCase):
     def test_non_cua_allow_apps_refused(self):
         raw_data = json.loads(FIXTURE_PATH.read_text())
         raw_data["session"]["allow_apps"] = ["com.android.settings"]
+        trail = Trail.from_json(raw_data)
+        self.assertEqual(trail.session["allow_apps"], ["com.android.settings"])
+
+        raw_data["session"]["allow_apps"] = ["not_a_valid_package"]
         with self.assertRaises(TrailError) as ctx:
             Trail.from_json(raw_data)
-        self.assertIn("com.android.settings", str(ctx.exception))
+        self.assertIn("not_a_valid_package", str(ctx.exception))
+
+    def test_any_app_package_validation(self):
+        # Valid package names
+        for valid_pkg in ["com.example.app", "a.b", "ai.openclaw.app.debug", "org.test_app.pkg_1"]:
+            action = validate_action({"kind": "launch", "package": valid_pkg})
+            self.assertEqual(action["package"], valid_pkg)
+
+        # Invalid package names
+        for invalid_pkg in ["nodots", "123.abc", ".starts.with.dot", "ends.with.dot.", "has space.app"]:
+            with self.assertRaises(TrailError):
+                validate_action({"kind": "launch", "package": invalid_pkg})
+
+    def test_launch_with_activity_and_extras(self):
+        script = 'launch ai.openclaw.app.debug --activity ai.openclaw.app.MainActivity --ez openclaw.screenshotMode true --ei count 42 --es openclaw.screenshotScene chat'
+        steps = parse_script(script)
+        self.assertEqual(len(steps), 1)
+        action = steps[0]["action"]
+        self.assertEqual(action["package"], "ai.openclaw.app.debug")
+        self.assertEqual(action["activity"], "ai.openclaw.app.MainActivity")
+        self.assertEqual(action["extras"], {
+            "openclaw.screenshotMode": True,
+            "count": 42,
+            "openclaw.screenshotScene": "chat",
+        })
+
+        # Extras without activity refused
+        with self.assertRaises(TrailError) as ctx:
+            validate_action({"kind": "launch", "package": "com.example.app", "extras": {"flag": True}})
+        self.assertIn("requires activity", str(ctx.exception))
+
+    def test_resize_action_and_script(self):
+        # script forms
+        s1 = parse_script("resize 1080x1920")
+        self.assertEqual(s1[0]["action"], {"kind": "resize", "size": "1080x1920", "density": None})
+        self.assertEqual(s1[0]["name"], "resize 1080x1920")
+
+        s2 = parse_script("resize 1920x1080 --density 320")
+        self.assertEqual(s2[0]["action"], {"kind": "resize", "size": "1920x1080", "density": 320})
+
+        s3 = parse_script("resize reset")
+        self.assertEqual(s3[0]["action"], {"kind": "resize", "size": "reset", "density": None})
+
+        # invalid resize
+        with self.assertRaises(TrailError):
+            validate_action({"kind": "resize", "size": "invalid"})
+        with self.assertRaises(TrailError):
+            validate_action({"kind": "resize", "size": "1080x1920", "density": -1})
+
+    def test_tap_and_set_text_label_script(self):
+        script = """
+        tap label:"Jump to latest"
+        set_text label:"Search field" "hello"
+        """
+        steps = parse_script(script)
+        self.assertEqual(len(steps), 2)
+        self.assertEqual(steps[0]["action"], {"kind": "tap", "label": "Jump to latest"})
+        self.assertEqual(steps[0]["name"], "tap Jump to latest")
+        self.assertEqual(steps[1]["action"], {"kind": "set_text", "label": "Search field", "text": "hello", "clear_first": True})
+        self.assertEqual(steps[1]["name"], "set_text Search field")
 
 
 if __name__ == "__main__":

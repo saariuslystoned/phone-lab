@@ -42,7 +42,10 @@ python3 -m phonelab serve --port 0             # a free port; the URL is printed
 python3 -m phonelab cua demo --driver /path/to/cua-driver --duration 300 --tap-every 8
 sh tools/treedump/build.sh                      # needs the Android SDK (javac, d8)
 python3 -m phonelab tree 0                      # element tree of logical display 0, with refs
-python3 -m phonelab serve --driver /path/to/cua-driver   # adds /api/tree, /api/tap and the refs overlay
+python3 -m phonelab tree 0 --app com.example.app # include specific third-party app in tree dump
+python3 -m phonelab serve --driver /path/to/cua-driver --app com.example.app
+python3 -m phonelab trail record my_script.txt --name my-trail --app com.example.app
+python3 -m phonelab trail replay my-trail.json --app com.example.app
 ```
 
 Other agents' emulators, phones, and phone-lab instances can share the

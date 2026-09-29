@@ -41,6 +41,7 @@ def build_parser() -> argparse.ArgumentParser:
     tree = sub.add_parser("tree", help="dump element tree with refs as JSON", parents=[device])
     tree.add_argument("logical_id", type=int, help="logical display id")
     tree.add_argument("--treedump-jar", help="path to treedump.jar (or set PHONELAB_TREEDUMP_JAR)")
+    tree.add_argument("--app", action="append", default=[], help="additional package name for text/act")
 
     srv = sub.add_parser("serve", help="run the live multi-display viewer", parents=[device])
     srv.add_argument("--host", default="127.0.0.1")
@@ -51,6 +52,7 @@ def build_parser() -> argparse.ArgumentParser:
     srv.add_argument("--driver", default=os.environ.get("PHONELAB_CUA_DRIVER"),
                      help="path to the cua-driver binary (or set PHONELAB_CUA_DRIVER)")
     srv.add_argument("--treedump-jar", help="path to treedump.jar (or set PHONELAB_TREEDUMP_JAR)")
+    srv.add_argument("--app", action="append", default=[], help="additional package name for text/act")
     srv.add_argument("--stream-human", action="store_true",
                      help="stream the human display (logical 0) with screenrecord h264 instead of screencap; "
                           "opt-in, needs ffmpeg on PATH")
@@ -88,6 +90,7 @@ def build_parser() -> argparse.ArgumentParser:
     rec.add_argument("--agent-only", action="store_true", help="skip human display capture")
     rec.add_argument("--cua-size", help="Cua display WIDTHxHEIGHT (driver default 1080x1920)")
     rec.add_argument("--cua-density", type=int, help="Cua display density dpi (driver default 320)")
+    rec.add_argument("--app", action="append", default=[], help="additional package name for text/act")
 
     rep = trail_sub.add_parser("replay", help="replay a trail", parents=[device])
     rep.add_argument("trail", help="path to trail.json")
@@ -102,6 +105,7 @@ def build_parser() -> argparse.ArgumentParser:
     rep.add_argument("--agent-only", action="store_true", help="skip human display capture")
     rep.add_argument("--cua-size", help="Cua display WIDTHxHEIGHT (driver default 1080x1920)")
     rep.add_argument("--cua-density", type=int, help="Cua display density dpi (driver default 320)")
+    rep.add_argument("--app", action="append", default=[], help="additional package name for text/act")
     rep.add_argument(
         "--max-heal-px",
         type=int,
@@ -151,9 +155,13 @@ def main(argv: list[str] | None = None) -> int:
         if not jar:
             print("error: --treedump-jar (or PHONELAB_TREEDUMP_JAR) is required", file=sys.stderr)
             return 2
-        from .tree import TreeDumper, TreeError
+        from .tree import DEFAULT_TEXT_PACKAGES, TreeDumper, TreeError
         from .refs import assign_refs
-        dumper = TreeDumper(adb, jar)
+        all_pkgs = list(DEFAULT_TEXT_PACKAGES)
+        for app in args.app:
+            if app not in all_pkgs:
+                all_pkgs.append(app)
+        dumper = TreeDumper(adb, jar, text_packages=tuple(all_pkgs), act_packages=tuple(all_pkgs))
         try:
             dumper.start()
             reply = dumper.tree(args.logical_id)
@@ -177,7 +185,8 @@ def main(argv: list[str] | None = None) -> int:
         driver = Path(args.driver) if args.driver else None
         return serve(adb, registry, args.host, args.port, device_dir, args.max_height,
                      driver=driver, treedump_jar=jar, stream_human=args.stream_human,
-                     stream_bitrate=args.stream_bitrate, stream_max_fps=args.stream_max_fps)
+                     stream_bitrate=args.stream_bitrate, stream_max_fps=args.stream_max_fps,
+                     apps=args.app)
     if args.command == "cua":
         from .cua import CuaDriver, demo as run_demo
 
@@ -197,7 +206,7 @@ def main(argv: list[str] | None = None) -> int:
 
         driver_val = getattr(args, "driver", None) or os.environ.get("PHONELAB_CUA_DRIVER")
         jar = _resolve_treedump_jar(getattr(args, "treedump_jar", None))
-        backend = AdbBackend(adb, Path(driver_val), jar)  # type: ignore
+        backend = AdbBackend(adb, Path(driver_val), jar, apps=getattr(args, "app", []))  # type: ignore
         trails_dir = Path(args.trails_dir) if getattr(args, "trails_dir", None) else device_dir / "trails"
 
         try:
@@ -216,6 +225,7 @@ def main(argv: list[str] | None = None) -> int:
                     capture_human=not args.agent_only,
                     cua_size=args.cua_size,
                     cua_density=args.cua_density,
+                    apps=getattr(args, "app", []),
                 )
             if args.trail_command == "replay":
                 return replay(
@@ -230,6 +240,7 @@ def main(argv: list[str] | None = None) -> int:
                     max_heal_px=args.max_heal_px,
                     cua_size=args.cua_size,
                     cua_density=args.cua_density,
+                    apps=getattr(args, "app", []),
                 )
         except Exception as exc:
             print(f"error: {adb.redact(str(exc))}", file=sys.stderr)
