@@ -14,7 +14,7 @@ from typing import Any, Callable, Protocol
 from PIL import Image
 
 from phonelab.adb import Adb
-from phonelab.cua import CuaDriver, CuaError, MAX_STALE_RETRIES, STALE_REASONS, fixture_state
+from phonelab.cua import FIXTURE, CuaDriver, CuaError, MAX_STALE_RETRIES, STALE_REASONS, fixture_state
 from phonelab.displays import Display, inventory, to_json
 from phonelab.heal import heal
 from phonelab.refs import assign_refs, find, label_of, tap_point
@@ -96,12 +96,32 @@ class Backend(Protocol):
 
 
 class AdbBackend:
-    def __init__(self, adb: Adb, driver_path: Path, treedump_jar: Path) -> None:
-        from phonelab.tree import TreeDumper
+    def __init__(self, adb: Adb, driver_path: Path, treedump_jar: Path, apps: list[str] | tuple[str, ...] | None = None) -> None:
+        from phonelab.tree import DEFAULT_TEXT_PACKAGES, TreeDumper
 
         self.adb = adb
         self.driver = CuaDriver(adb, driver_path)
-        self.dumper = TreeDumper(adb, treedump_jar)
+        self.apps = list(apps or [])
+        all_pkgs = list(DEFAULT_TEXT_PACKAGES)
+        for app in self.apps:
+            if app not in all_pkgs:
+                all_pkgs.append(app)
+        self.dumper = TreeDumper(adb, treedump_jar, text_packages=tuple(all_pkgs), act_packages=tuple(all_pkgs))
+
+    def add_apps(self, pkgs: Any) -> None:
+        from phonelab.tree import DEFAULT_TEXT_PACKAGES
+        added = False
+        for pkg in pkgs:
+            if pkg not in self.apps:
+                self.apps.append(pkg)
+                added = True
+        if added:
+            all_pkgs = list(DEFAULT_TEXT_PACKAGES)
+            for app in self.apps:
+                if app not in all_pkgs:
+                    all_pkgs.append(app)
+            self.dumper.text_packages = tuple(all_pkgs)
+            self.dumper.act_packages = tuple(all_pkgs)
 
     def inventory(self) -> list[Display]:
         return inventory(self.adb)
@@ -551,6 +571,7 @@ class Runner:
         self.session_record: SessionRecord | None = None
         self.display_id: int | None = None
         self.target_id: str | None = None
+        self.resized_displays: set[int] = set()
         self.seq_tracker: dict[int, int] = defaultdict(int)
 
     def open_session(self, allow_apps: list[str], label: str) -> SessionRecord:
@@ -580,7 +601,22 @@ class Runner:
         self.registry.write(rec)
         return rec
 
+    def _fixture_oracle(self) -> bool:
+        """The counter oracle belongs to the Cua fixture; steps in other apps get no derived launch/tap predicate."""
+        return self.session_record is not None and self.session_record.package == FIXTURE
+
     def close_session(self) -> None:
+        for d in sorted(self.resized_displays):
+            try:
+                self.backend.shell("wm", "size", "reset", "-d", str(d))
+            except Exception:
+                pass
+            try:
+                self.backend.shell("wm", "density", "reset", "-d", str(d))
+            except Exception:
+                pass
+        self.resized_displays.clear()
+
         if self.session_record and self.session_record.state == "active":
             try:
                 self.backend.driver.stop(self.session_record.session_id)
@@ -709,61 +745,97 @@ class Runner:
         trees_heal: dict[str, str] | None = None
 
         if kind in ("tap", "set_text"):
+            label = step.action.get("label")
             ref = step.action.get("ref", "")
-            node = find(tree_before, ref)
-            if node is None:
-                if not tree_before.get("ok") or "refs" not in tree_before:
-                    status = "fail"
-                    message = f"ref {ref} not found: tree read failed ({tree_before.get('error') or 'no refs'}); heal skipped"
-                else:
-                    recorded_spec = step.action.get("recorded")
-                    ref_count = len([n for n in tree_before.get("nodes", []) if n.get("ref")])
-                    if not recorded_spec:
-                        status = "fail"
-                        message = f"ref {ref} not found in tree ({ref_count} refs); trail has no recorded node, re-record to enable healing"
-                    else:
-                        recorded_node = dict(recorded_spec)
-                        recorded_node["ref"] = ref
-                        recorded_tree = {"nodes": [recorded_node], "refs": {"count": 1, "refs": {ref: 0}}}
-                        res = heal(ref, recorded_tree, tree_before, max_distance_px=self.max_heal_px)
-                        recorded_file = writer.write_tree(index, "recorded", display_id, recorded_tree)
-                        current_file = writer.write_tree(index, "current", display_id, tree_before)
-                        trees_heal = {"recorded": recorded_file, "current": current_file}
-                        result_detail["heal"] = res.to_json()
-                        note = res.note
-                        if res.status == "healed":
-                            node = res.node
-                            status = "healed"
-                            message = f"ref {ref} healed: {note['reason']} {note['distance_px']} px"
-                            action_detail["ref_used"] = res.ref
-                            if kind == "tap":
-                                tap_x, tap_y = tap_point(node)
-                            elif kind == "set_text":
-                                node_index = node.get("i", 0)
-                        else:
-                            status = "fail"
-                            message = f"ref {ref} missing: {note['reason']} ({note['message']}); trees {recorded_file} and {current_file}"
-            else:
+            if not ref and label:
                 if derive:
-                    step.action["recorded"] = {k: node[k] for k in RECORDED_NODE_KEYS if k in node}
-                if kind == "tap":
-                    tap_x, tap_y = tap_point(node)
-                    hint = {
-                        "class": node.get("class"),
-                        "label": label_of(node),
-                        "resource_id": node.get("id"),
-                    }
+                    if not tree_before.get("ok"):
+                        status = "fail"
+                        message = f"label {label!r} cannot be resolved: tree read failed ({tree_before.get('error') or 'no refs'})"
+                    else:
+                        from phonelab.refs import resolve_label
+                        candidates = resolve_label(tree_before, label, action_kind=kind)
+                        if len(candidates) != 1:
+                            status = "fail"
+                            message = f"label {label!r} matched {len(candidates)} nodes (expected 1)"
+                        else:
+                            node = candidates[0]
+                            ref = node.get("ref", "")
+                            step.action["ref"] = ref
+                else:
+                    status = "fail"
+                    message = f"ref missing for label {label!r}; trail was never recorded, re-record to resolve refs"
+
+            if status in ("ok", "healed"):
+                node = find(tree_before, ref)
+                if node is None and label and not derive and tree_before.get("ok"):
+                    # A step written by label keeps the author's intent: re-resolve it before the geometric
+                    # heal, which needs the node's own label (a Compose EditText's label lives in a child).
+                    from phonelab.refs import resolve_label
+                    candidates = resolve_label(tree_before, label, action_kind=kind)
+                    if len(candidates) == 1:
+                        node = candidates[0]
+                        status = "healed"
+                        message = f"ref {ref} re-resolved by label {label!r} to {node.get('ref')}"
+                        action_detail["ref_used"] = node.get("ref")
+                        result_detail["heal"] = {
+                            "status": "healed",
+                            "ref": node.get("ref"),
+                            "note": {"kind": "healed", "reason": "label", "from": ref, "label": label},
+                        }
+                if node is None:
+                    if not tree_before.get("ok") or "refs" not in tree_before:
+                        status = "fail"
+                        message = f"ref {ref} not found: tree read failed ({tree_before.get('error') or 'no refs'}); heal skipped"
+                    else:
+                        recorded_spec = step.action.get("recorded")
+                        ref_count = len([n for n in tree_before.get("nodes", []) if n.get("ref")])
+                        if not recorded_spec:
+                            status = "fail"
+                            message = f"ref {ref} not found in tree ({ref_count} refs); trail has no recorded node, re-record to enable healing"
+                        else:
+                            recorded_node = dict(recorded_spec)
+                            recorded_node["ref"] = ref
+                            recorded_tree = {"nodes": [recorded_node], "refs": {"count": 1, "refs": {ref: 0}}}
+                            res = heal(ref, recorded_tree, tree_before, max_distance_px=self.max_heal_px)
+                            recorded_file = writer.write_tree(index, "recorded", display_id, recorded_tree)
+                            current_file = writer.write_tree(index, "current", display_id, tree_before)
+                            trees_heal = {"recorded": recorded_file, "current": current_file}
+                            result_detail["heal"] = res.to_json()
+                            note = res.note
+                            if res.status == "healed":
+                                node = res.node
+                                status = "healed"
+                                message = f"ref {ref} healed: {note['reason']} {note['distance_px']} px"
+                                action_detail["ref_used"] = res.ref
+                                if kind == "tap":
+                                    tap_x, tap_y = tap_point(node)
+                                elif kind == "set_text":
+                                    node_index = node.get("i", 0)
+                            else:
+                                status = "fail"
+                                message = f"ref {ref} missing: {note['reason']} ({note['message']}); trees {recorded_file} and {current_file}"
+                else:
                     if derive:
-                        step.action["hint"] = hint
-                        id_part = (node.get("id") or "").split("/")[-1]
-                        if id_part and (step.name == f"tap {ref}" or step.name == "tap increment"):
-                            step.name = f"tap {id_part}"
-                elif kind == "set_text":
-                    node_index = node.get("i", 0)
+                        step.action["recorded"] = {k: node[k] for k in RECORDED_NODE_KEYS if k in node}
+                    if kind == "tap":
+                        tap_x, tap_y = tap_point(node)
+                        hint = {
+                            "class": node.get("class"),
+                            "label": label_of(node),
+                            "resource_id": node.get("id"),
+                        }
+                        if derive:
+                            step.action["hint"] = hint
+                            id_part = (node.get("id") or "").split("/")[-1]
+                            if id_part and (step.name == f"tap {ref}" or step.name == "tap increment"):
+                                step.name = f"tap {id_part}"
+                    elif kind == "set_text":
+                        node_index = node.get("i", 0)
 
         # 4b. Record mode: read the oracle before a tap so the derived predicate waits for a change
         counter_before = None
-        if derive and kind == "tap" and status in ("ok", "healed") and step.predicate is None:
+        if derive and kind == "tap" and status in ("ok", "healed") and step.predicate is None and self._fixture_oracle():
             st0 = self.backend.fixture_state()
             counter_before = st0.get("counter") if st0 else None
 
@@ -774,32 +846,66 @@ class Runner:
                 if kind == "launch":
                     pkg = step.action["package"]
                     fresh = step.action.get("fresh", True)
+                    activity = step.action.get("activity")
+                    extras = step.action.get("extras")
                     if fresh:
                         self.backend.shell("am", "force-stop", pkg)
-                    launch_resp = self.backend.driver.launch(self.session_record.session_id, pkg)
-                    self.target_id = launch_resp.get("data", {}).get("target_id")
-                    if self.session_record:
-                        self.session_record.package = pkg
-                        self.session_record.target_id = self.target_id
-                    action_detail.update({"package": pkg})
+                    if extras:
+                        am_cmd = ["am", "start", "-W", "--display", str(display_id), "-n", f"{pkg}/{activity}"]
+                        for k, v in extras.items():
+                            if isinstance(v, bool):
+                                am_cmd.extend(["--ez", k, "true" if v else "false"])
+                            elif isinstance(v, int):
+                                am_cmd.extend(["--ei", k, str(v)])
+                            elif isinstance(v, str):
+                                am_cmd.extend(["--es", k, v])
+                        self.backend.shell(*am_cmd)
+                        self.target_id = None
+                        if self.session_record:
+                            self.session_record.package = pkg
+                            self.session_record.target_id = None
+                        action_detail.update({"package": pkg, "via": "am"})
+                        if activity:
+                            action_detail["activity"] = activity
+                    else:
+                        launch_kwargs = {}
+                        if activity:
+                            launch_kwargs["activity"] = activity
+                        launch_resp = self.backend.driver.launch(self.session_record.session_id, pkg, **launch_kwargs)
+                        self.target_id = launch_resp.get("data", {}).get("target_id")
+                        if self.session_record:
+                            self.session_record.package = pkg
+                            self.session_record.target_id = self.target_id
+                        action_detail.update({"package": pkg})
+                        if activity:
+                            action_detail["activity"] = activity
                 elif kind == "tap":
-                    while True:
-                        snap = self.backend.driver.snapshot(self.session_record.session_id, self.target_id)
-                        snap_id = snap["data"]["snapshot_id"]
-                        try:
-                            self.backend.driver.tap(self.session_record.session_id, snap_id, tap_x, tap_y)
-                            break
-                        except CuaError as exc:
-                            if exc.reason in STALE_REASONS and frame_stale_retries < MAX_STALE_RETRIES:
-                                frame_stale_retries += 1
-                                continue
-                            raise
-                    action_detail.update({
-                        "x": tap_x,
-                        "y": tap_y,
-                        "snapshot_id": snap_id,
-                        "package": self.session_record.package if self.session_record else None,
-                    })
+                    if self.target_id is None:
+                        self.backend.shell("input", "-d", str(display_id), "tap", str(tap_x), str(tap_y))
+                        action_detail.update({
+                            "via": "input",
+                            "x": tap_x,
+                            "y": tap_y,
+                            "package": self.session_record.package if self.session_record else None,
+                        })
+                    else:
+                        while True:
+                            snap = self.backend.driver.snapshot(self.session_record.session_id, self.target_id)
+                            snap_id = snap["data"]["snapshot_id"]
+                            try:
+                                self.backend.driver.tap(self.session_record.session_id, snap_id, tap_x, tap_y)
+                                break
+                            except CuaError as exc:
+                                if exc.reason in STALE_REASONS and frame_stale_retries < MAX_STALE_RETRIES:
+                                    frame_stale_retries += 1
+                                    continue
+                                raise
+                        action_detail.update({
+                            "x": tap_x,
+                            "y": tap_y,
+                            "snapshot_id": snap_id,
+                            "package": self.session_record.package if self.session_record else None,
+                        })
                 elif kind == "set_text":
                     self.backend.act(display_id, node_index, "focus")
                     if step.action.get("clear_first", True):
@@ -828,6 +934,18 @@ class Runner:
                     action_detail.update({"ms": ms})
                 elif kind == "wait_for":
                     pass
+                elif kind == "resize":
+                    size = step.action.get("size")
+                    density = step.action.get("density")
+                    if size == "reset":
+                        self.backend.shell("wm", "size", "reset", "-d", str(display_id))
+                        self.backend.shell("wm", "density", "reset", "-d", str(display_id))
+                    else:
+                        self.backend.shell("wm", "size", size, "-d", str(display_id))
+                        if density is not None:
+                            self.backend.shell("wm", "density", str(density), "-d", str(display_id))
+                    self.resized_displays.add(display_id)
+                    action_detail.update({"size": size, "density": density, "display_id": display_id})
             except CuaError as exc:
                 status = "refused" if exc.status == "refused" else "error"
                 message = exc.reason
@@ -844,7 +962,10 @@ class Runner:
         used_predicate = step.predicate
         if status in ("ok", "healed"):
             if derive and step.predicate is None:
-                if kind == "launch":
+                if kind in ("launch", "tap") and not self._fixture_oracle():
+                    pkg = self.session_record.package if self.session_record else None
+                    message = f"no oracle for {pkg}; predicate omitted"
+                elif kind == "launch":
                     pkg = step.action.get("package")
                     t_poll0 = time.monotonic()
                     timeout_ms = 8000
@@ -1035,18 +1156,22 @@ def record(
     capture_human: bool = True,
     cua_size: str | None = None,
     cua_density: int | None = None,
+    apps: list[str] | tuple[str, ...] | None = None,
 ) -> int:
     runs_dir = Path(runs_dir)
     trails_dir = Path(trails_dir)
     parsed_steps = parse_script(script_text)
 
     # Determine packages
-    allow_apps = ["ai.cua.fixture.notes"]
+    launched_pkgs: list[str] = []
     for s in parsed_steps:
         if s["action"].get("kind") == "launch" and s["action"].get("package"):
             pkg = s["action"]["package"]
-            if pkg not in allow_apps:
-                allow_apps.append(pkg)
+            if pkg not in launched_pkgs:
+                launched_pkgs.append(pkg)
+    allow_apps = launched_pkgs if launched_pkgs else ["ai.cua.fixture.notes"]
+    if hasattr(backend, "add_apps"):
+        backend.add_apps(list(apps or []) + list(allow_apps))
 
     runner = Runner(backend, registry, runs_dir, capture_human=capture_human,
                     cua_size=cua_size, cua_density=cua_density)
@@ -1140,6 +1265,7 @@ def replay(
     max_heal_px: int = 120,
     cua_size: str | None = None,
     cua_density: int | None = None,
+    apps: list[str] | tuple[str, ...] | None = None,
 ) -> int:
     runs_dir = Path(runs_dir)
     trail_path = Path(trail_path)
@@ -1155,6 +1281,8 @@ def replay(
         cua_density=cua_density,
     )
     allow_apps = trail.session.get("allow_apps", ["ai.cua.fixture.notes"])
+    if hasattr(backend, "add_apps"):
+        backend.add_apps(list(apps or []) + list(allow_apps))
     label = trail.session.get("label", default_label(trail.name))
 
     results: list[dict] = []

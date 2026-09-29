@@ -56,7 +56,7 @@ class CuaDriver:
             data.pop("image_base64", None)
         exit_code = reply.get("exit_code", proc.returncode)
         if exit_code != 0 or reply.get("status") != "ok":
-            error = reply.get("error") or {}
+            error = reply.get("error") if isinstance(reply.get("error"), dict) else {}
             reason = error.get("reason") or error.get("message") or "unknown"
             raise CuaError(str(reply.get("status") or "error"), self.adb.redact(str(reason)))
         return reply
@@ -72,8 +72,11 @@ class CuaDriver:
             args += ["--density", str(density)]
         return self.call(*args, "--label", label)
 
-    def launch(self, sid: str, package: str) -> dict:
-        return self.call("app", "launch", "--package", package, session=sid)
+    def launch(self, sid: str, package: str, activity: str | None = None) -> dict:
+        args = ["app", "launch", "--package", package]
+        if activity:
+            args += ["--activity", activity]
+        return self.call(*args, session=sid)
 
     def inspect(self, sid: str) -> dict:
         return self.call("session", "inspect", session=sid)

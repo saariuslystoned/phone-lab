@@ -8,11 +8,13 @@ import re
 import shlex
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 TRAIL_SCHEMA = "phone-lab.trail.v1"
-ACTION_KINDS = ("launch", "tap", "set_text", "key", "swipe", "wait_for", "sleep")
+ACTION_KINDS = ("launch", "tap", "set_text", "key", "swipe", "wait_for", "sleep", "resize")
 PREDICATE_KINDS = ("fixture_counter", "text_present", "ref_present", "ref_absent")
 ALLOWED_PACKAGES = ("ai.cua.fixture.notes", "ai.cua.android.demo")
+PACKAGE_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+$")
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,59}$")
 DEFAULT_TIMEOUT_MS = 5000
 
@@ -78,8 +80,8 @@ class Trail:
         if not isinstance(allow_apps, list) or not allow_apps:
             raise TrailError("session.allow_apps must be a non-empty list")
         for app in allow_apps:
-            if not isinstance(app, str) or app not in ALLOWED_PACKAGES:
-                raise TrailError(f"package {app!r} not in allowed packages: {ALLOWED_PACKAGES}")
+            if not isinstance(app, str) or not PACKAGE_RE.fullmatch(app):
+                raise TrailError(f"package {app!r} not a valid package name")
         label = session.get("label")
         if not isinstance(label, str):
             raise TrailError("session.label must be a string")
@@ -118,20 +120,51 @@ def validate_action(action: dict) -> dict:
     res = dict(action)
     if kind == "launch":
         pkg = res.get("package")
-        if not isinstance(pkg, str) or pkg not in ALLOWED_PACKAGES:
+        if not isinstance(pkg, str) or not PACKAGE_RE.fullmatch(pkg):
             raise TrailError(f"launch package {pkg!r} not allowed")
         res["fresh"] = bool(res.get("fresh", True))
+        activity = res.get("activity")
+        if activity is not None:
+            if not isinstance(activity, str) or not activity:
+                raise TrailError("launch activity must be a non-empty string")
+        extras = res.get("extras")
+        if extras is not None:
+            if not isinstance(extras, dict):
+                raise TrailError("launch extras must be an object")
+            for k, v in extras.items():
+                if not isinstance(k, str) or not k:
+                    raise TrailError("extra key must be a non-empty string")
+                if isinstance(v, bool):
+                    pass
+                elif isinstance(v, int):
+                    pass
+                elif isinstance(v, str):
+                    pass
+                else:
+                    raise TrailError(f"extra {k!r} value must be bool, int, or str, got {type(v).__name__}")
+            if extras and not activity:
+                raise TrailError("launch with extras requires activity")
     elif kind == "tap":
         ref = res.get("ref")
-        if not isinstance(ref, str) or not ref:
+        label = res.get("label")
+        if not ref and not label:
+            raise TrailError("tap requires a non-empty ref or label")
+        if ref is not None and (not isinstance(ref, str) or not ref):
             raise TrailError("tap requires a non-empty ref")
+        if label is not None and (not isinstance(label, str) or not label):
+            raise TrailError("tap requires a non-empty label")
         if "recorded" in res:
             if not isinstance(res["recorded"], dict):
                 raise TrailError("tap action 'recorded' must be an object")
     elif kind == "set_text":
         ref = res.get("ref")
-        if not isinstance(ref, str) or not ref:
+        label = res.get("label")
+        if not ref and not label:
+            raise TrailError("set_text requires a non-empty ref or label")
+        if ref is not None and (not isinstance(ref, str) or not ref):
             raise TrailError("set_text requires a non-empty ref")
+        if label is not None and (not isinstance(label, str) or not label):
+            raise TrailError("set_text requires a non-empty label")
         text = res.get("text")
         if not isinstance(text, str):
             raise TrailError("set_text requires string text")
@@ -157,6 +190,18 @@ def validate_action(action: dict) -> dict:
             raise TrailError("sleep requires ms > 0 integer")
     elif kind == "wait_for":
         pass
+    elif kind == "resize":
+        size = res.get("size")
+        if not isinstance(size, str):
+            raise TrailError("resize requires size")
+        if size != "reset":
+            if not re.fullmatch(r"\d+x\d+", size):
+                raise TrailError(f"invalid resize size: {size!r}")
+        density = res.get("density")
+        if density is not None:
+            if not isinstance(density, int) or isinstance(density, bool) or density <= 0:
+                raise TrailError("resize density must be a positive integer or null")
+        res["density"] = density
     return res
 
 
@@ -222,12 +267,16 @@ def _default_step_name(action: dict, predicate: dict | None) -> str:
         pkg = action.get("package", "")
         return "launch fixture" if pkg == "ai.cua.fixture.notes" else f"launch {pkg}"
     if kind == "tap":
+        if "label" in action and not action.get("ref"):
+            return f"tap {action['label']}"
         return f"tap {action.get('ref', '')}"
     if kind == "wait_for":
         if predicate and predicate.get("kind") == "text_present":
             return f"wait for {predicate.get('text')}"
         return "wait_for"
     if kind == "set_text":
+        if "label" in action and not action.get("ref"):
+            return f"set_text {action['label']}"
         return f"set_text {action.get('ref', '')}"
     if kind == "key":
         return f"key {action.get('keycode', '')}"
@@ -235,6 +284,8 @@ def _default_step_name(action: dict, predicate: dict | None) -> str:
         return "swipe"
     if kind == "sleep":
         return f"sleep {action.get('ms', '')}ms"
+    if kind == "resize":
+        return f"resize {action.get('size', '')}"
     return kind
 
 
@@ -303,18 +354,73 @@ def parse_script_line(line: str) -> dict | None:
 
     if kind == "launch":
         fresh = True
-        if "--keep" in tokens:
-            fresh = False
-            tokens.remove("--keep")
-        if len(tokens) < 2:
+        activity = None
+        extras: dict[str, Any] = {}
+        package = None
+        i = 1
+        while i < len(tokens):
+            tok = tokens[i]
+            if tok == "--keep":
+                fresh = False
+                i += 1
+            elif tok == "--activity":
+                if i + 1 >= len(tokens):
+                    raise TrailError("missing value for --activity")
+                activity = tokens[i + 1]
+                i += 2
+            elif tok == "--ez":
+                if i + 2 >= len(tokens):
+                    raise TrailError("missing key or value for --ez")
+                k = tokens[i + 1]
+                v_str = tokens[i + 2].lower()
+                if v_str == "true":
+                    v = True
+                elif v_str == "false":
+                    v = False
+                else:
+                    raise TrailError(f"invalid boolean for --ez: {tokens[i + 2]!r}")
+                extras[k] = v
+                i += 3
+            elif tok == "--ei":
+                if i + 2 >= len(tokens):
+                    raise TrailError("missing key or value for --ei")
+                k = tokens[i + 1]
+                try:
+                    v = int(tokens[i + 2])
+                except ValueError:
+                    raise TrailError(f"invalid integer for --ei: {tokens[i + 2]!r}")
+                extras[k] = v
+                i += 3
+            elif tok == "--es":
+                if i + 2 >= len(tokens):
+                    raise TrailError("missing key or value for --es")
+                k = tokens[i + 1]
+                v = tokens[i + 2]
+                extras[k] = v
+                i += 3
+            elif not tok.startswith("--") and package is None:
+                package = tok
+                i += 1
+            else:
+                raise TrailError(f"unexpected token in launch: {tok!r}")
+        if package is None:
             raise TrailError("launch requires package name")
-        package = tokens[1]
         action = {"kind": "launch", "package": package, "fresh": fresh}
+        if activity is not None:
+            action["activity"] = activity
+        if extras:
+            action["extras"] = extras
     elif kind == "tap":
         if len(tokens) < 2:
-            raise TrailError("tap requires ref")
-        ref = tokens[1]
-        action = {"kind": "tap", "ref": ref}
+            raise TrailError("tap requires ref or label")
+        target = tokens[1]
+        if target.startswith("label:"):
+            label = target[len("label:"):]
+            if not label:
+                raise TrailError("tap requires non-empty label")
+            action = {"kind": "tap", "label": label}
+        else:
+            action = {"kind": "tap", "ref": target}
     elif kind == "set_text":
         clear_first = True
         if "--no-clear" in tokens:
@@ -322,9 +428,15 @@ def parse_script_line(line: str) -> dict | None:
             tokens.remove("--no-clear")
         if len(tokens) < 3:
             raise TrailError("set_text requires ref and text")
-        ref = tokens[1]
+        target = tokens[1]
         text = tokens[2]
-        action = {"kind": "set_text", "ref": ref, "text": text, "clear_first": clear_first}
+        if target.startswith("label:"):
+            label = target[len("label:"):]
+            if not label:
+                raise TrailError("set_text requires non-empty label")
+            action = {"kind": "set_text", "label": label, "text": text, "clear_first": clear_first}
+        else:
+            action = {"kind": "set_text", "ref": target, "text": text, "clear_first": clear_first}
     elif kind == "key":
         if len(tokens) < 2:
             raise TrailError("key requires keycode")
@@ -379,6 +491,26 @@ def parse_script_line(line: str) -> dict | None:
             pred_dict["timeout_ms"] = timeout_ms
         action = {"kind": "wait_for"}
         explicit_predicate = True
+    elif kind == "resize":
+        density = None
+        rem_tokens = []
+        i = 1
+        while i < len(tokens):
+            if tokens[i] == "--density":
+                if i + 1 >= len(tokens):
+                    raise TrailError("missing value for --density")
+                try:
+                    density = int(tokens[i + 1])
+                except ValueError:
+                    raise TrailError(f"invalid integer for --density: {tokens[i + 1]!r}")
+                i += 2
+            else:
+                rem_tokens.append(tokens[i])
+                i += 1
+        if len(rem_tokens) != 1:
+            raise TrailError("resize requires size or 'reset'")
+        size = rem_tokens[0]
+        action = {"kind": "resize", "size": size, "density": density}
 
     action = validate_action(action)
     if pred_dict is not None:

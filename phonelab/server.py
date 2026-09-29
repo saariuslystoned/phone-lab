@@ -26,7 +26,7 @@ from .presence import ViewerPresence
 from .refs import assign_refs, find, tap_point
 from .sessions import Registry
 from .trace import ResponseMixin
-from .tree import TreeDumper, TreeError
+from .tree import DEFAULT_TEXT_PACKAGES, TreeDumper, TreeError
 
 UI_PATH = Path(__file__).resolve().parent / "ui" / "index.html"
 SCHEMA = "phone-lab.freeze.v1"
@@ -493,7 +493,7 @@ def serve(adb: Adb, registry: Registry, host: str = "127.0.0.1", port: int = 879
           runs_dir: Path = Path("runs/phone-lab-runs"), max_height: int = 1000,
           driver: Path | None = None, treedump_jar: Path | None = None,
           stream_human: bool = False, stream_bitrate: int = 4_000_000,
-          stream_max_fps: float = 5.0) -> int:
+          stream_max_fps: float = 5.0, apps: list[str] | tuple[str, ...] | None = None) -> int:
     """Run the viewer until Ctrl-C; capture threads start immediately."""
     if stream_human and shutil.which("ffmpeg") is None:
         print("error: --stream-human needs ffmpeg on PATH", file=sys.stderr)
@@ -528,7 +528,12 @@ def serve(adb: Adb, registry: Registry, host: str = "127.0.0.1", port: int = 879
 
         if treedump_jar is not None:
             try:
-                dumper = TreeDumper(adb, Path(treedump_jar))
+                extra_apps = list(apps or [])
+                all_pkgs = list(DEFAULT_TEXT_PACKAGES)
+                for app in extra_apps:
+                    if app not in all_pkgs:
+                        all_pkgs.append(app)
+                dumper = TreeDumper(adb, Path(treedump_jar), text_packages=tuple(all_pkgs), act_packages=tuple(all_pkgs))
                 print(adb.redact(json.dumps(dumper.start())), flush=True)
                 server.dumper = dumper
             except TreeError as exc:

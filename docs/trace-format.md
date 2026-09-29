@@ -146,11 +146,12 @@ element, else `null`; `detail` holds the verb's own arguments.
 
 | `kind` | `detail` keys |
 |---|---|
-| `launch` | `package` |
-| `tap` | `x`, `y` (resolved from the ref at run time), `snapshot_id` |
-| `set_text` | `text`, `clear_first` |
+| `launch` | `package`, optional `activity`, optional `extras`, optional `via` (`"cua"` or `"am"`) |
+| `tap` | `x`, `y` (resolved from ref or label at run time), `snapshot_id` (when via Cua), optional `via` (`"cua"` or `"input"`), optional `label` |
+| `set_text` | `text`, `clear_first`, optional `label` |
 | `key` | `keycode` |
 | `swipe` | `from`, `to` (`[x, y]`), `duration_ms` |
+| `resize` | `size` (`"reset"` or `"<width>x<height>"`), optional `density` |
 | `wait_for` | none (the predicate is the action) |
 | `sleep` | `ms` |
 

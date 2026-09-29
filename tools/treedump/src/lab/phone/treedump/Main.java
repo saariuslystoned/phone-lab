@@ -256,6 +256,13 @@ public class Main {
 
         long startMs = System.currentTimeMillis();
         long startNano = System.nanoTime();
+        // The connection's node cache can outlive the UI: a reopened Compose drawer in OpenClaw kept
+        // returning the closed-drawer tree (2026-09-29). Read fresh nodes on every request.
+        try {
+            uiAutomation.clearCache();
+        } catch (Throwable ignored) {
+            // clearCache() is API 34+; older devices keep the cached read.
+        }
         SparseArray<List<AccessibilityWindowInfo>> allDisplays = uiAutomation.getWindowsOnAllDisplays();
         List<AccessibilityWindowInfo> windowList = allDisplays.get(displayId);
 
