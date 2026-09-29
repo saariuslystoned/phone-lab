@@ -26,7 +26,7 @@ from .presence import ViewerPresence
 from .refs import assign_refs, find, tap_point
 from .sessions import Registry
 from .trace import ResponseMixin
-from .tree import DEFAULT_TEXT_PACKAGES, TreeDumper, TreeError
+from .tree import TreeDumper, TreeError, packages_with
 
 UI_PATH = Path(__file__).resolve().parent / "ui" / "index.html"
 SCHEMA = "phone-lab.freeze.v1"
@@ -528,12 +528,8 @@ def serve(adb: Adb, registry: Registry, host: str = "127.0.0.1", port: int = 879
 
         if treedump_jar is not None:
             try:
-                extra_apps = list(apps or [])
-                all_pkgs = list(DEFAULT_TEXT_PACKAGES)
-                for app in extra_apps:
-                    if app not in all_pkgs:
-                        all_pkgs.append(app)
-                dumper = TreeDumper(adb, Path(treedump_jar), text_packages=tuple(all_pkgs), act_packages=tuple(all_pkgs))
+                pkgs = packages_with(apps)
+                dumper = TreeDumper(adb, Path(treedump_jar), text_packages=pkgs, act_packages=pkgs)
                 print(adb.redact(json.dumps(dumper.start())), flush=True)
                 server.dumper = dumper
             except TreeError as exc:

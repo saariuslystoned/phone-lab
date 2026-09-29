@@ -155,13 +155,14 @@ def main(argv: list[str] | None = None) -> int:
         if not jar:
             print("error: --treedump-jar (or PHONELAB_TREEDUMP_JAR) is required", file=sys.stderr)
             return 2
-        from .tree import DEFAULT_TEXT_PACKAGES, TreeDumper, TreeError
+        from .tree import TreeDumper, TreeError, packages_with
         from .refs import assign_refs
-        all_pkgs = list(DEFAULT_TEXT_PACKAGES)
-        for app in args.app:
-            if app not in all_pkgs:
-                all_pkgs.append(app)
-        dumper = TreeDumper(adb, jar, text_packages=tuple(all_pkgs), act_packages=tuple(all_pkgs))
+        try:
+            pkgs = packages_with(args.app)
+        except TreeError as exc:
+            print(f"error: {adb.redact(str(exc))}", file=sys.stderr)
+            return 2
+        dumper = TreeDumper(adb, jar, text_packages=pkgs, act_packages=pkgs)
         try:
             dumper.start()
             reply = dumper.tree(args.logical_id)
@@ -206,7 +207,7 @@ def main(argv: list[str] | None = None) -> int:
 
         driver_val = getattr(args, "driver", None) or os.environ.get("PHONELAB_CUA_DRIVER")
         jar = _resolve_treedump_jar(getattr(args, "treedump_jar", None))
-        backend = AdbBackend(adb, Path(driver_val), jar, apps=getattr(args, "app", []))  # type: ignore
+        backend = AdbBackend(adb, Path(driver_val), jar)  # type: ignore
         trails_dir = Path(args.trails_dir) if getattr(args, "trails_dir", None) else device_dir / "trails"
 
         try:
