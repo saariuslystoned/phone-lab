@@ -44,8 +44,10 @@ phone-lab is a public MIT repo. These rules apply to every agent and worker.
 
 ## Design origin
 
-Ideas come from public write-ups of other tools; the implementation is our
-own. Do not copy code from other projects into this repo.
+Ideas come from public write-ups of other tools. Borrowing code or docs
+from public projects is fine when the license allows it: keep the upstream
+license file next to the copy and record the source URL and commit in an
+`UPSTREAM.md` beside it (example: `skills/adaptive/`).
 
 ## Work discipline
 
