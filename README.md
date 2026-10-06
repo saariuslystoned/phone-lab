@@ -43,6 +43,8 @@ python3 -m phonelab cua demo --driver /path/to/cua-driver --duration 300 --tap-e
 sh tools/treedump/build.sh                      # needs the Android SDK (javac, d8)
 python3 -m phonelab tree 0                      # element tree of logical display 0, with refs
 python3 -m phonelab tree 0 --app com.example.app # include specific third-party app in tree dump
+python3 -m phonelab marks 0                     # numbered tap targets: overlay PNG + JSON ("tap 3")
+python3 -m phonelab tap 0 '#3' --expect-ref e7f67h  # tap mark 3; refuses if it is no longer that ref
 python3 -m phonelab serve --driver /path/to/cua-driver --app com.example.app
 python3 -m phonelab trail record my_script.txt --name my-trail --app com.example.app
 python3 -m phonelab trail replay my-trail.json --app com.example.app
