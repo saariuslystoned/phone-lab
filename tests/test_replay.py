@@ -375,6 +375,34 @@ class ReplayUnitTests(unittest.TestCase):
                     del s["action"]["recorded"]
             self.assertEqual(rec_dict, fix_dict)
 
+    def test_journey_sentence_names_carry_into_record_and_replay_runs(self):
+        sentences = [
+            "Launch the Synthetic Notes Fixture from a fresh start.",
+            "Tap the INCREMENT button.",
+            "Verify the counter text reads \"Count: 1\" (don't scroll).",
+        ]
+        script = (
+            f"name {sentences[0]}\nlaunch ai.cua.fixture.notes\n"
+            f"name {sentences[1]}\ntap e7f67h\n"
+            f"name {sentences[2]}\nwait_for text_present \"Count: 1\"\n"
+        )
+        backend = FakeBackend()
+        with tempfile.TemporaryDirectory() as tmp:
+            runs_dir = Path(tmp) / "runs"
+            trails_dir = Path(tmp) / "trails"
+            registry = Registry(runs_dir, "pixel-10-pro-fold")
+            self.assertEqual(record(backend, registry, runs_dir, trails_dir, "journey", script), 0)
+            trail_path = trails_dir / "journey.json"
+            self.assertEqual([s.name for s in load_trail(trail_path).steps], sentences)
+            self.assertEqual(replay(backend, registry, runs_dir, trail_path, times=1), 0)
+            runs = list_runs(runs_dir)
+            self.assertEqual(len(runs), 2)
+            for r in runs:
+                run_doc = json.loads((runs_dir / r["run_id"] / "run.json").read_text())
+                self.assertEqual([s["name"] for s in run_doc["steps"]], sentences)
+                for i, sentence in enumerate(sentences):
+                    self.assertEqual(load_step(runs_dir, r["run_id"], i)["name"], sentence)
+
     def test_4_times_runs_in_one_session_with_multiple_launches(self):
         backend = FakeBackend()
         with tempfile.TemporaryDirectory() as tmp:

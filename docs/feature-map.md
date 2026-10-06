@@ -74,6 +74,12 @@ screenshot-fixture mode (no Gateway, no personal data); packet
 | treedump clears the UiAutomation node cache before every tree read | `tools/treedump/.../Main.java` `handleTree` | none (device behaviour) | `runs/phone-lab-runs/openclaw-pr-proof-20260929/events.jsonl` `stale-tree`: old jar missed a reopened drawer that `uiautomator dump` saw; new jar sees it | proven |
 | `TreeDumper.tree()` restart pushes the jar and retries the connect | `phonelab/tree.py` | `tests/test_tree.py::test_restart_without_start_pushes_the_jar` | `runs/phone-lab-runs/openclaw-pr-proof-20260929/events.jsonl` `no-push-on-restart`, `foreign-uiautomator` | proven |
 
+## Journeys skill (2026-10-06)
+
+| Feature | Modules / endpoints | Automated tests | Device proof | Status |
+|---|---|---|---|---|
+| Plain-English journey (`<journey name><description><actions><action>`, optional `<app package>`) compiled once by an agent from a live `phonelab tree` read into a trail script, each step named with its sentence; `trail record`, then `trail replay --times N` with no LLM; Journeys-style results markdown. Helpers: journey XML → script skeleton (`TODO` lines block `record`; app allow-list), run dirs → results. `name` lines are kept verbatim (quotes and apostrophes survive) through trail, `run.json`, `step.json`, log lines and the trace viewer | `skills/phone-lab-journey/SKILL.md`, `scripts/journey_to_script.py`, `scripts/journey_results.py`, `examples/fixture-increment.{xml,trail.txt}`; `phonelab/trails.py` `parse_script_line` (`name` before `shlex`) | `tests/test_journey_skill.py` (10), `tests/test_trails.py::test_name_line_keeps_sentence_verbatim`, `tests/test_replay.py::test_journey_sentence_names_carry_into_record_and_replay_runs` | `runs/phone-lab-runs/pixel-10-pro-fold/journey-skill-20261006-100424/` (`journey-result.md`: record 4/4, replay 2/2 pass 8/8, agent-only, 15.1 s each; `trace-api-observation.txt`); `proof/journey-skill/PROOF.md` | proven |
+
 ## Shared machine (2026-09-27, proven with two phones)
 
 | Feature | Code | Tests | Proof | Status |

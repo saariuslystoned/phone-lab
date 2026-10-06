@@ -86,6 +86,30 @@ class TrailsUnitTests(unittest.TestCase):
             {"kind": "text_present", "text": "Count: 3", "timeout_ms": 5000},
         )
 
+    def test_name_line_keeps_sentence_verbatim(self):
+        script = (
+            "name Verify the counter text reads \"Count: 2\".\n"
+            "wait_for text_present \"Count: 2\"\n"
+            "name Tap the button, but don't   wait\n"
+            "sleep 10\n"
+            "name \"tap first\"\n"
+            "sleep 10\n"
+            "name\t\"Save\" is shown and \"Undo\"\n"
+            "sleep 10\n"
+        )
+        steps = parse_script(script)
+        self.assertEqual(
+            [s["name"] for s in steps],
+            [
+                "Verify the counter text reads \"Count: 2\".",
+                "Tap the button, but don't wait",
+                "tap first",
+                "\"Save\" is shown and \"Undo\"",
+            ],
+        )
+        with self.assertRaises(TrailError):
+            parse_script("name   \nsleep 10")
+
     def test_parse_script_name_and_expect_and_timeout(self):
         script = """
         # comments and blank lines are ignored

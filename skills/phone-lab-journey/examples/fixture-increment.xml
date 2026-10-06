@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- phone-lab Journey: plain-English steps, compiled once by an agent into a
+     deterministic trail (fixture-increment.trail.txt), then replayed with no LLM. -->
+<journey name="fixture-increment">
+  <description>Launch the synthetic notes fixture fresh, press INCREMENT twice, and confirm the counter shows two presses.</description>
+  <app package="ai.cua.fixture.notes"/>
+  <actions>
+    <action>Launch the Synthetic Notes Fixture from a fresh start.</action>
+    <action>Tap the INCREMENT button.</action>
+    <action>Tap the INCREMENT button again.</action>
+    <action>Verify the counter text reads "Count: 2".</action>
+  </actions>
+</journey>

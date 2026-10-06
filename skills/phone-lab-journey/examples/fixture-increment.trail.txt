@@ -1,0 +1,23 @@
+# compiled from fixture-increment.xml (journey 'fixture-increment') -> trail 'fixture-increment'
+# refs: live `phonelab tree 14` on the Cua agent display (fixture fresh, Count: 0), 2026-10-06: INCREMENT = e7f67h (Button, ai.cua.fixture.notes:id/increment), counter = kyvprg (TextView)
+# description: Launch the synthetic notes fixture fresh, press INCREMENT twice, and confirm the counter shows two presses.
+
+# action 1: Launch the Synthetic Notes Fixture from a fresh start.
+#   reviewed against the live tree
+name Launch the Synthetic Notes Fixture from a fresh start.
+launch ai.cua.fixture.notes
+
+# action 2: Tap the INCREMENT button.
+#   INCREMENT button = e7f67h in the live tree
+name Tap the INCREMENT button.
+tap e7f67h
+
+# action 3: Tap the INCREMENT button again.
+#   INCREMENT button = e7f67h in the live tree
+name Tap the INCREMENT button again.
+tap e7f67h
+
+# action 4: Verify the counter text reads "Count: 2".
+#   reviewed against the live tree
+name Verify the counter text reads "Count: 2".
+wait_for text_present "Count: 2"
