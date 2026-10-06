@@ -44,8 +44,7 @@ phone-lab is a public MIT repo. These rules apply to every agent and worker.
 
 ## Design origin
 
-Ideas come from public write-ups of other tools; the implementation is our
-own. Do not copy code from other projects into this repo.
+Ideas come from public write-ups of other tools.
 
 ## Work discipline
 
