@@ -1,4 +1,4 @@
-"""CLI: `python3 -m phonelab inventory | serve | cua demo | tree | trace | trail`."""
+"""CLI: `python3 -m phonelab inventory | serve | cua demo | tree | marks | tap | trace | trail`."""
 from __future__ import annotations
 
 import argparse
@@ -6,6 +6,7 @@ import json
 import os
 import signal
 import sys
+import time
 from pathlib import Path
 
 from .adb import Adb, AdbError
@@ -27,6 +28,89 @@ def _resolve_treedump_jar(cli_val: str | None) -> Path | None:
     return None
 
 
+def _ms(start: float) -> int:
+    return int((time.time() - start) * 1000)
+
+
+def run_marks(adb, dumper, args, device_dir: Path, display_lookup=None) -> tuple[int, dict]:
+    """Tree + screencap of one logical display → overlay PNG and marks JSON. Returns (exit code, result)."""
+    from .marks import render, select
+
+    t0 = time.time()
+    reply = dumper.tree(args.logical_id)
+    tree_ms = _ms(t0)
+    if not reply.get("ok"):
+        return 1, {"ok": False, "error": adb.redact(str(reply.get("error", "tree failed"))),
+                   "display_id": args.logical_id}
+    marks = select(reply, include_system=args.include_system)
+
+    t1 = time.time()
+    displays = (display_lookup or inventory)(adb)
+    match = [d for d in displays if d.logical_id == args.logical_id]
+    if not match:
+        return 1, {"ok": False, "error": f"no display with logical id {args.logical_id}", "display_id": args.logical_id}
+    display = match[0]
+    if display.state == "OFF":
+        return 1, {"ok": False, "error": f"logical display {args.logical_id} is OFF", "display_id": args.logical_id}
+    png = adb.screencap(display.sf_id)
+    screencap_ms = _ms(t1)
+    if png is None:
+        return 1, {"ok": False, "error": "screencap returned no PNG", "display_id": args.logical_id}
+
+    t2 = time.time()
+    crop = 0 if args.no_crop else display.status_bar_px
+    overlay = render(png, marks, crop_status_bar_px=crop)
+    render_ms = _ms(t2)
+
+    if args.out:
+        out = Path(args.out)
+    else:
+        stamp = time.strftime("%Y%m%d-%H%M%S") + f"-{int(time.time() * 1000) % 1000:03d}"
+        out = device_dir / "marks" / f"marks-{args.logical_id}-{stamp}.png"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_bytes(overlay)
+    result = {
+        "ok": True, "display_id": args.logical_id, "sf_id": display.sf_id, "unique_id": display.unique_id,
+        "include_system": bool(args.include_system), "crop_status_bar_px": crop,
+        "count": len(marks), "marks": marks, "png": str(out),
+        "timings_ms": {"tree": tree_ms, "tree_device": reply.get("cost_ms"), "screencap": screencap_ms,
+                       "render": render_ms, "total": _ms(t0)},
+    }
+    out.with_suffix(".json").write_text(json.dumps(result, indent=2))
+    result["json"] = str(out.with_suffix(".json"))
+    return 0, result
+
+
+def run_tap(adb, dumper, args, packages: tuple[str, ...]) -> tuple[int, dict]:
+    """Fresh tree → resolve '#N' or ref → guard → `input -d <id> tap x y`. Exit 0 ok, 1 error, 3 refused."""
+    from .marks import resolve, select
+
+    t0 = time.time()
+    reply = dumper.tree(args.logical_id)
+    tree_ms = _ms(t0)
+    base = {"display_id": args.logical_id, "target": args.target}
+    if not reply.get("ok"):
+        return 1, {"ok": False, **base, "error": adb.redact(str(reply.get("error", "tree failed")))}
+    marks = select(reply, include_system=args.include_system)
+    try:
+        mark = resolve(marks, args.target)
+    except ValueError as exc:
+        return 1, {"ok": False, **base, "error": str(exc)}
+    if mark is None:
+        return 1, {"ok": False, **base, "error": f"{args.target} not found among {len(marks)} marks"}
+    found = {"n": mark["n"], "ref": mark["ref"], "label": mark["label"], "tap": mark["tap"]}
+    if args.expect_ref and mark["ref"] != args.expect_ref:
+        return 3, {"ok": False, **base, **found, "refused": "stale",
+                   "error": f"{args.target} is now ref {mark['ref']}, expected {args.expect_ref}; re-run marks"}
+    if mark.get("package") not in packages:
+        return 3, {"ok": False, **base, **found, "refused": "package",
+                   "error": f"package {mark.get('package')!r} not allowed (add it with --app)"}
+    t1 = time.time()
+    adb.shell("input", "-d", str(args.logical_id), "tap", str(mark["tap"][0]), str(mark["tap"][1]))
+    tap_ms = _ms(t1)
+    return 0, {"ok": True, **base, **found, "timings_ms": {"tree": tree_ms, "tap": tap_ms, "total": _ms(t0)}}
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="phonelab", description="phone-lab: watch and drive Android displays.")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -42,6 +126,28 @@ def build_parser() -> argparse.ArgumentParser:
     tree.add_argument("logical_id", type=int, help="logical display id")
     tree.add_argument("--treedump-jar", help="path to treedump.jar (or set PHONELAB_TREEDUMP_JAR)")
     tree.add_argument("--app", action="append", default=[], help="additional package name for text/act")
+
+    mk = sub.add_parser("marks", help="number the tap targets of a display; write an overlay PNG, print JSON",
+                        parents=[device])
+    mk.add_argument("logical_id", type=int, help="logical display id")
+    mk.add_argument("--out", help="overlay PNG path (default runs/phone-lab-runs/<device-tag>/marks/...)")
+    mk.add_argument("--include-system", action="store_true",
+                    help="also mark system windows (status bar, navigation, IME); off by default")
+    mk.add_argument("--no-crop", action="store_true", help="keep the status bar in the overlay")
+    mk.add_argument("--treedump-jar", help="path to treedump.jar (or set PHONELAB_TREEDUMP_JAR)")
+    mk.add_argument("--app", action="append", default=[], help="additional package name for text/act")
+    mk.add_argument("--runs-dir", default=DEFAULT_RUNS_DIR)
+    mk.add_argument("--device-tag", help="override the device tag (derived from model by default)")
+
+    tp = sub.add_parser("tap", help="tap a mark ('#N') or ref on a display with `input -d`", parents=[device])
+    tp.add_argument("logical_id", type=int, help="logical display id")
+    tp.add_argument("target", help="'#N' (mark number) or a ref")
+    tp.add_argument("--expect-ref", help="refuse unless the target resolves to this ref (stale-overlay guard)")
+    tp.add_argument("--include-system", action="store_true",
+                    help="number system windows too (must match the `marks` call)")
+    tp.add_argument("--treedump-jar", help="path to treedump.jar (or set PHONELAB_TREEDUMP_JAR)")
+    tp.add_argument("--app", action="append", default=[],
+                    help="additional package that may be tapped (default: the two Cua apps only)")
 
     srv = sub.add_parser("serve", help="run the live multi-display viewer", parents=[device])
     srv.add_argument("--host", default="127.0.0.1")
@@ -171,6 +277,31 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(reply, indent=2))
             return 0 if reply.get("ok") else 1
         except TreeError as exc:
+            print(f"error: {adb.redact(str(exc))}", file=sys.stderr)
+            return 1
+        finally:
+            dumper.stop()
+    if args.command in ("marks", "tap"):
+        jar = _resolve_treedump_jar(args.treedump_jar)
+        if not jar:
+            print("error: --treedump-jar (or PHONELAB_TREEDUMP_JAR) is required", file=sys.stderr)
+            return 2
+        from .tree import TreeDumper, TreeError, packages_with
+        try:
+            pkgs = packages_with(args.app)
+        except TreeError as exc:
+            print(f"error: {adb.redact(str(exc))}", file=sys.stderr)
+            return 2
+        dumper = TreeDumper(adb, jar, text_packages=pkgs, act_packages=pkgs)
+        try:
+            dumper.start()
+            if args.command == "marks":
+                code, result = run_marks(adb, dumper, args, device_dir)
+            else:
+                code, result = run_tap(adb, dumper, args, pkgs)
+            print(adb.redact(json.dumps(result, indent=2)))
+            return code
+        except (TreeError, AdbError) as exc:
             print(f"error: {adb.redact(str(exc))}", file=sys.stderr)
             return 1
         finally:
