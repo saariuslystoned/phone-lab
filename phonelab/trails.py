@@ -292,6 +292,17 @@ def parse_script_line(line: str) -> dict | None:
     line = line.strip()
     if not line or line.startswith("#"):
         return None
+    head, _, rest = line.replace("\t", " ").partition(" ")
+    if head == "name":
+        # Verbatim: a step name is free text (a journey sentence may hold quotes or
+        # apostrophes that shlex would drop or reject). One enclosing pair of
+        # matching quotes is stripped so `name "tap first"` keeps working.
+        text = " ".join(rest.split())
+        if len(text) >= 2 and text[0] == text[-1] and text[0] in "\"'" and text[0] not in text[1:-1]:
+            text = text[1:-1].strip()
+        if not text:
+            raise TrailError("name line requires text")
+        return {"kind": "name", "name": text}
     try:
         tokens = shlex.split(line)
     except ValueError as exc:

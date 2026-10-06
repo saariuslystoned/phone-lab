@@ -132,7 +132,7 @@ key <KEYCODE> [expect <predicate>]
 swipe <x1> <y1> <x2> <y2> [<duration_ms>] [expect <predicate>]
 sleep <ms>
 wait_for <predicate>
-name <text>                                     names the NEXT step (optional)
+name <text>                                     names the NEXT step (optional; text taken verbatim, not shlex-split)
 <predicate> := fixture_counter <int> | text_present <text> | ref_present <ref> | ref_absent <ref>
 ```
 

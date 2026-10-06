@@ -64,6 +64,7 @@ not refused. See [plans/shared-machine-instances.md](plans/shared-machine-instan
 - [docs/feature-map.md](docs/feature-map.md) — features, modules, tests, proof, status
 - [plans/roadmap.md](plans/roadmap.md) — slices 1–5
 - [skills/phone-lab-verify/SKILL.md](skills/phone-lab-verify/SKILL.md) — the verification loop
+- [skills/phone-lab-journey/SKILL.md](skills/phone-lab-journey/SKILL.md) — plain-English journey → trail once → replays with no LLM
 - [skills/adaptive/SKILL.md](skills/adaptive/SKILL.md) — Google's Android "make app adaptive" skill
 
 ## License
