@@ -10,8 +10,6 @@ Allowed root files: `README.md`, `AGENTS.md`, `REPO_HYGIENE.md`, `LICENSE`,
   screen content).
 - `docs/` — durable depth: ADRs (`adr-NNN-*.md`), display model, formats.
 - `plans/` — dated roadmap and per-slice specs.
-- `skills/` — agent skills. Vendored skills stay byte-identical to upstream
-  and carry their `LICENSE.txt` plus an `UPSTREAM.md` (source, commit).
 - `proof/<slice>/PROOF.md` — tracked, text-only proof packets that point at
   raw evidence by path.
 - `runs/phone-lab-runs/` — git-ignored run output: captures, freezes,

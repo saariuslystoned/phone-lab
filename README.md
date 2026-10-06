@@ -64,9 +64,8 @@ not refused. See [plans/shared-machine-instances.md](plans/shared-machine-instan
 - [docs/feature-map.md](docs/feature-map.md) — features, modules, tests, proof, status
 - [plans/roadmap.md](plans/roadmap.md) — slices 1–5
 - [skills/phone-lab-verify/SKILL.md](skills/phone-lab-verify/SKILL.md) — the verification loop
-- [skills/adaptive/SKILL.md](skills/adaptive/SKILL.md) — Google's Android
-  "make app adaptive" skill, vendored unchanged ([UPSTREAM.md](skills/adaptive/UPSTREAM.md))
+- [skills/adaptive/SKILL.md](skills/adaptive/SKILL.md) — Google's Android "make app adaptive" skill
 
 ## License
 
-MIT, except `skills/adaptive/`, which is Apache-2.0 (see its `LICENSE.txt`).
+MIT
