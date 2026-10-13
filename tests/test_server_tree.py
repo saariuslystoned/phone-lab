@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import io
 import json
 import tempfile
 import threading
@@ -11,12 +12,20 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+from PIL import Image
+
 from phonelab.adb import Adb
 from phonelab.cua import CuaError
 from phonelab.server import ViewerServer
 from phonelab.sessions import Registry, SessionRecord
 
 FIXTURE_PATH = Path(__file__).resolve().parent / "fixtures" / "tree_cua_fixture.json"
+
+
+def png_bytes(width: int = 1080, height: int = 1920) -> bytes:
+    out = io.BytesIO()
+    Image.new("RGB", (width, height), (250, 250, 250)).save(out, format="PNG")
+    return out.getvalue()
 
 
 class FakeCaptureManager:
@@ -84,7 +93,7 @@ class FakeDumper:
 
     def tree(self, logical_id: int) -> dict:
         self.calls.append(("tree", logical_id))
-        if logical_id == 101:
+        if logical_id in (0, 101):
             return copy.deepcopy(self.fixture)
         if logical_id == 7:
             return {
@@ -157,6 +166,14 @@ class ServerTreeTests(unittest.TestCase):
         self.registry = Registry(self.runs_dir)
         self.manager = FakeCaptureManager(self.registry)
         self.adb = Adb(serial="FAKESERIAL")
+        self.adb_shell_calls: list[tuple] = []
+
+        def fake_shell(*args, **kwargs):
+            self.adb_shell_calls.append(args)
+            return ""
+
+        self.adb.shell = fake_shell
+        self.adb.screencap = lambda sf_id, timeout=30: png_bytes()
         self.device = {"model": "Pixel 10 Pro Fold", "android_release": "17"}
         with open(FIXTURE_PATH, "r", encoding="utf-8") as f:
             self.fixture = json.load(f)
@@ -394,6 +411,83 @@ class ServerTreeTests(unittest.TestCase):
         self.assertEqual(tree_info.get("hello", {}).get("hello"), "phone-lab treedump 1")
         self.assertEqual(tree_info.get("restarts"), 0)
         self.assertIsNone(tree_info.get("last_error"))
+
+    def test_marks_endpoint_returns_json_and_png(self) -> None:
+        status, data, _ = _request_json(f"http://127.0.0.1:{self.port}/api/marks/0")
+        self.assertEqual(status, 200)
+        self.assertTrue(data.get("ok"))
+        self.assertEqual(data.get("display_id"), 0)
+        self.assertIn("marks", data)
+        self.assertIn("count", data)
+        self.assertGreater(data.get("count"), 0)
+        self.assertIn("crop_status_bar_px", data)
+        self.assertIn("png", data)
+        self.assertTrue(Path(data["png"]).exists())
+        self.assertIn("timings_ms", data)
+        self.assertIn("tree", data["timings_ms"])
+        self.assertIn("render", data["timings_ms"])
+
+    def test_marks_endpoint_404_missing_display(self) -> None:
+        status, data, _ = _request_json(f"http://127.0.0.1:{self.port}/api/marks/999")
+        self.assertEqual(status, 404)
+        self.assertFalse(data.get("ok"))
+
+    def test_marks_endpoint_503_without_dumper(self) -> None:
+        self.server.dumper = None
+        status, data, _ = _request_json(f"http://127.0.0.1:{self.port}/api/marks/0")
+        self.assertEqual(status, 503)
+        self.assertFalse(data.get("ok"))
+
+    def test_marks_endpoint_app_filter(self) -> None:
+        status, data, _ = _request_json(f"http://127.0.0.1:{self.port}/api/marks/0?app=ai.cua.fixture.notes")
+        self.assertEqual(status, 200)
+        self.assertTrue(data.get("ok"))
+        for m in data.get("marks", []):
+            self.assertEqual(m.get("package"), "ai.cua.fixture.notes")
+
+    def test_tap_physical_display_by_mark_number(self) -> None:
+        status, data, _ = _request_json(
+            f"http://127.0.0.1:{self.port}/api/tap",
+            method="POST",
+            data={"display_id": 0, "target": "#3"},
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(data.get("ok"))
+        self.assertEqual(data.get("display_id"), 0)
+        self.assertEqual(data.get("target"), "#3")
+        self.assertEqual(data.get("n"), 3)
+        self.assertEqual(data.get("ref"), "e7f67h")
+        self.assertEqual(data.get("tap"), [540, 263])
+        self.assertTrue(any(call == ("input", "-d", "0", "tap", "540", "263") for call in self.adb_shell_calls))
+
+    def test_tap_physical_display_expect_ref_stale_409(self) -> None:
+        status, data, _ = _request_json(
+            f"http://127.0.0.1:{self.port}/api/tap",
+            method="POST",
+            data={"display_id": 0, "target": "#3", "expect_ref": "wrongref"},
+        )
+        self.assertEqual(status, 409)
+        self.assertFalse(data.get("ok"))
+        self.assertEqual(data.get("refused"), "stale")
+
+    def test_tap_physical_display_expect_ref_match_200(self) -> None:
+        status, data, _ = _request_json(
+            f"http://127.0.0.1:{self.port}/api/tap",
+            method="POST",
+            data={"display_id": 0, "target": "#3", "expect_ref": "e7f67h"},
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(data.get("ok"))
+        self.assertEqual(data.get("ref"), "e7f67h")
+
+    def test_tap_physical_display_unknown_target_400(self) -> None:
+        status, data, _ = _request_json(
+            f"http://127.0.0.1:{self.port}/api/tap",
+            method="POST",
+            data={"display_id": 0, "target": "#99"},
+        )
+        self.assertEqual(status, 400)
+        self.assertFalse(data.get("ok"))
 
 
 if __name__ == "__main__":

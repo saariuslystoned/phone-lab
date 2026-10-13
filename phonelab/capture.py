@@ -273,6 +273,7 @@ class CaptureManager:
                 "sf_id": display.sf_id, "unique_id": display.unique_id, "logical_id": display.logical_id, "name": display.name,
                 "kind": display.kind, "role": display.role, "state": display.state,
                 "width": display.width, "height": display.height,
+                "status_bar_px": display.status_bar_px,
                 "seq": frame.seq if frame else None,
                 "captured_at": frame.captured_at if frame else None,
                 "capture_ms": frame.capture_ms if frame else None,
