@@ -1,6 +1,7 @@
 """HTTP server: the viewer page, the JSON state API, JPEG frames, and freeze-frame composites."""
 from __future__ import annotations
 
+import base64
 import datetime as dt
 import errno
 import hashlib
@@ -21,7 +22,8 @@ from . import trace
 from .adb import Adb
 from .capture import CaptureManager, Frame
 from .cua import CuaDriver, CuaError
-from .displays import Display
+from .displays import Display, inventory, to_json
+from .marks import render, resolve, select
 from .presence import ViewerPresence
 from .refs import assign_refs, find, tap_point
 from .sessions import Registry
@@ -284,6 +286,110 @@ class ViewerHandler(ResponseMixin, BaseHTTPRequestHandler):
             if "cost_ms" in reply:
                 extra["X-Tree-Cost-Ms"] = str(reply["cost_ms"])
             self._json(reply, 200, extra=extra)
+        elif path.startswith("/api/marks/"):
+            match = re.fullmatch(r"/api/marks/(\d+)", path)
+            if not match:
+                self._json({"error": "not found"}, 404)
+                return
+            logical_id = int(match.group(1))
+            if self.server.dumper is None:
+                self._json({"ok": False, "error": "treedump not configured"}, 503)
+                return
+
+            split_url = urlsplit(self.path)
+            qs = parse_qs(split_url.query)
+            include_system = qs.get("include_system", ["0"])[0] in ("1", "true", "True")
+            app_params = qs.get("app", [])
+
+            displays = self.server.manager.state().get("displays", []) if self.server.manager else []
+            matching = next((d for d in displays if d.get("logical_id") == logical_id), None)
+            if matching is None and self.server.adb:
+                try:
+                    inv = inventory(self.server.adb)
+                    inv_match = next((d for d in inv if d.logical_id == logical_id), None)
+                    if inv_match:
+                        matching = to_json(inv_match)
+                except Exception:
+                    pass
+            if matching is None:
+                self._json({"ok": False, "error": f"no display with logical id {logical_id}", "display_id": logical_id}, 404)
+                return
+            if matching.get("state") == "OFF":
+                self._json({"ok": False, "error": f"logical display {logical_id} is OFF", "display_id": logical_id}, 400)
+                return
+
+            t0 = time.time()
+            try:
+                reply = self.server.dumper.tree(logical_id)
+            except TreeError as exc:
+                self._json({"ok": False, "error": self.server.adb.redact(str(exc)) if self.server.adb else str(exc), "display_id": logical_id}, 503)
+                return
+            tree_ms = round((time.time() - t0) * 1000)
+
+            if not reply.get("ok"):
+                self._json({"ok": False, "error": reply.get("error", "tree failed"), "display_id": logical_id}, 404)
+                return
+
+            marks = select(reply, include_system=include_system)
+            if app_params:
+                allowed_app_set = set(app_params)
+                marks = [m for m in marks if m.get("package") in allowed_app_set]
+                for n, m in enumerate(marks, start=1):
+                    m["n"] = n
+
+            t1 = time.time()
+            png = None
+            if self.server.manager:
+                thread_frame = self.server.manager.frame(f"logical-{logical_id}")
+                if thread_frame and thread_frame.png:
+                    png = thread_frame.png
+                elif thread_frame is None and matching.get("sf_id"):
+                    sf_frame = self.server.manager.frame(str(matching.get("sf_id")))
+                    if sf_frame and sf_frame.png:
+                        png = sf_frame.png
+            if png is None and self.server.adb and hasattr(self.server.adb, "screencap"):
+                sf_id = matching.get("sf_id")
+                png = self.server.adb.screencap(str(sf_id))
+            screencap_ms = round((time.time() - t1) * 1000)
+            if png is None:
+                self._json({"ok": False, "error": "screencap returned no PNG", "display_id": logical_id}, 500)
+                return
+
+            t2 = time.time()
+            crop = matching.get("status_bar_px", 0) if matching.get("kind") == "physical" else 0
+            if qs.get("no_crop", ["0"])[0] in ("1", "true", "True"):
+                crop = 0
+            overlay = render(png, marks, crop_status_bar_px=crop)
+            render_ms = round((time.time() - t2) * 1000)
+
+            stamp = time.strftime("%Y%m%d-%H%M%S") + f"-{int(time.time() * 1000) % 1000:03d}"
+            marks_dir = self.server.runs_dir / "marks"
+            marks_dir.mkdir(parents=True, exist_ok=True)
+            out_png = marks_dir / f"marks-{logical_id}-{stamp}.png"
+            out_png.write_bytes(overlay)
+
+            result = {
+                "ok": True,
+                "display_id": logical_id,
+                "sf_id": matching.get("sf_id"),
+                "unique_id": matching.get("unique_id"),
+                "crop_status_bar_px": crop,
+                "count": len(marks),
+                "marks": marks,
+                "png": str(out_png),
+                "png_base64": base64.b64encode(overlay).decode("ascii"),
+                "timings_ms": {
+                    "tree": tree_ms,
+                    "tree_device": reply.get("cost_ms"),
+                    "screencap": screencap_ms,
+                    "render": render_ms,
+                    "total": round((time.time() - t0) * 1000),
+                },
+            }
+            out_json = out_png.with_suffix(".json")
+            out_json.write_text(json.dumps(result, indent=2))
+            result["json"] = str(out_json)
+            self._json(result, 200)
         elif path.startswith("/frame/") and path.endswith(".jpg"):
             frame = self.server.manager.frame(unquote(path[len("/frame/"):-len(".jpg")])) if self.server.manager else None
             if frame is None:
@@ -319,6 +425,8 @@ class ViewerHandler(ResponseMixin, BaseHTTPRequestHandler):
                 return
 
             logical_id = data.get("logical_id")
+            if logical_id is None:
+                logical_id = data.get("display_id")
             ref = data.get("ref")
             if logical_id is None:
                 self._json({"ok": False, "reason": "missing logical_id"}, 400)
@@ -329,8 +437,104 @@ class ViewerHandler(ResponseMixin, BaseHTTPRequestHandler):
                 self._json({"ok": False, "reason": "invalid logical_id"}, 400)
                 return
 
-            displays = self.server.manager.state().get("displays", [])
+            displays = self.server.manager.state().get("displays", []) if self.server.manager else []
             matching = next((d for d in displays if d.get("logical_id") == logical_id), None)
+            if matching is None and self.server.adb:
+                try:
+                    inv = inventory(self.server.adb)
+                    inv_match = next((d for d in inv if d.logical_id == logical_id), None)
+                    if inv_match:
+                        matching = to_json(inv_match)
+                except Exception:
+                    pass
+
+            target = data.get("target")
+            if target is None and ("display_id" in data or "expect_ref" in data) and ref is not None:
+                target = ref
+
+            expect_ref = data.get("expect_ref")
+
+            if target is not None:
+                if matching is None:
+                    self._json({"ok": False, "reason": f"no display with logical id {logical_id}"}, 404)
+                    return
+                if matching.get("state") == "OFF":
+                    self._json({"ok": False, "reason": f"logical display {logical_id} is OFF"}, 400)
+                    return
+                if self.server.dumper is None:
+                    self._json({"ok": False, "reason": "no treedumper configured"}, 503)
+                    return
+                try:
+                    tree = self.server.dumper.tree(logical_id)
+                except TreeError as exc:
+                    self._json({"ok": False, "reason": self.server.adb.redact(str(exc)) if self.server.adb else str(exc)}, 503)
+                    return
+                if not tree.get("ok"):
+                    self._json({"ok": False, "reason": tree.get("error", "tree failed")}, 400)
+                    return
+
+                include_system = bool(data.get("include_system", False))
+                marks = select(tree, include_system=include_system)
+                self.server.trees[logical_id] = tree
+                try:
+                    mark = resolve(marks, target)
+                except ValueError as exc:
+                    self._json({"ok": False, "reason": str(exc)}, 400)
+                    return
+                if mark is None:
+                    self._json({"ok": False, "reason": f"{target} not found among {len(marks)} marks"}, 400)
+                    return
+
+                if expect_ref and mark["ref"] != expect_ref:
+                    self._json({
+                        "ok": False,
+                        "refused": "stale",
+                        "reason": f"{target} is now ref {mark['ref']}, expected {expect_ref}; re-run marks",
+                        "mark": mark,
+                    }, 409)
+                    return
+
+                app_arg = data.get("app")
+                allowed_apps = [app_arg] if isinstance(app_arg, str) else (list(app_arg) if isinstance(app_arg, (list, tuple)) else [])
+                try:
+                    allowed_pkgs = packages_with(allowed_apps)
+                except TreeError as exc:
+                    self._json({"ok": False, "reason": str(exc)}, 400)
+                    return
+                dumper_pkgs = getattr(self.server.dumper, "text_packages", ())
+                all_allowed = set(allowed_pkgs) | set(dumper_pkgs)
+                if mark.get("package") and mark.get("package") not in all_allowed:
+                    self._json({
+                        "ok": False,
+                        "refused": "package",
+                        "reason": f"package {mark.get('package')!r} not allowed (add it with --app)",
+                    }, 400)
+                    return
+
+                t1 = time.time()
+                x, y = mark["tap"]
+                if self.server.adb:
+                    self.server.adb.shell("input", "-d", str(logical_id), "tap", str(x), str(y))
+                tap_ms = round((time.time() - t1) * 1000)
+                cost_ms = round((time.time() - t0) * 1000)
+                self._json({
+                    "ok": True,
+                    "display_id": logical_id,
+                    "target": target,
+                    "ref": mark["ref"],
+                    "n": mark["n"],
+                    "label": mark["label"],
+                    "tap": mark["tap"],
+                    "package": mark.get("package"),
+                    "timings_ms": {
+                        "tree": tree.get("cost_ms", 0),
+                        "tap": tap_ms,
+                        "total": cost_ms,
+                    },
+                    "cost_ms": cost_ms,
+                })
+                return
+
             if matching is None or matching.get("role") != "agent":
                 self._json({"ok": False, "reason": "not an agent display"}, 400)
                 return
