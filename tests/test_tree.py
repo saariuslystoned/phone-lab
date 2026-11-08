@@ -46,6 +46,27 @@ if shell_args[0] == "sha256sum":
 if shell_args[0] == "pkill":
     sys.exit(0)
 
+if "com.pixeluse.helper.UiAutomationDaemon --stop" in " ".join(shell_args):
+    busy_marker = os.environ.get("FAKE_ADB_UIA_BUSY_MARKER")
+    if busy_marker and os.path.exists(busy_marker):
+        try:
+            os.remove(busy_marker)
+        except OSError:
+            pass
+    stop_log = os.environ.get("FAKE_ADB_UIAD_STOP_LOG")
+    if stop_log:
+        with open(stop_log, "a") as f:
+            f.write("stop\n")
+    sys.exit(0)
+
+busy_marker = os.environ.get("FAKE_ADB_UIA_BUSY_MARKER")
+if busy_marker and os.path.exists(busy_marker):
+    print(json.dumps({
+        "ok": False,
+        "error": "could not connect UiAutomation: UiAutomation not connected",
+    }), flush=True)
+    sys.exit(1)
+
 hello = {
     "ok": True,
     "hello": "phone-lab treedump 1",
@@ -216,6 +237,26 @@ class TreeDumperTests(unittest.TestCase):
             self.assertEqual(push_log.read_text().count("push"), 1)
         finally:
             os.environ.pop("FAKE_ADB_PUSH_LOG", None)
+            dumper.stop()
+
+    def test_start_recovers_from_pixel_use_uiad_contention(self):
+        busy_marker = Path(self.tmp.name) / "uia_busy.marker"
+        stop_log = Path(self.tmp.name) / "uiad_stop.log"
+        busy_marker.write_text("busy")
+        os.environ["FAKE_ADB_UIA_BUSY_MARKER"] = str(busy_marker)
+        os.environ["FAKE_ADB_UIAD_STOP_LOG"] = str(stop_log)
+        dumper = TreeDumper(self.adb, self.jar, timeout=5.0)
+        try:
+            hello = dumper.start()
+            self.assertTrue(hello["ok"])
+            self.assertEqual(stop_log.read_text().count("stop"), 1)
+        finally:
+            os.environ.pop("FAKE_ADB_UIA_BUSY_MARKER", None)
+            os.environ.pop("FAKE_ADB_UIAD_STOP_LOG", None)
+            if busy_marker.exists():
+                busy_marker.unlink()
+            if stop_log.exists():
+                stop_log.unlink()
             dumper.stop()
 
 
