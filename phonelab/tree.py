@@ -13,6 +13,8 @@ from .adb import Adb
 from .trails import PACKAGE_RE
 
 REMOTE_DIR = "/data/local/tmp/phonelab"
+PIXEL_USE_UIAD_DIR = "/data/local/tmp/pixel-use-uiad"
+PIXEL_USE_UIAD_JAR = f"{PIXEL_USE_UIAD_DIR}/daemon.jar"
 DEFAULT_TEXT_PACKAGES = ("ai.cua.fixture.notes", "ai.cua.android.demo")
 CONNECT_ATTEMPTS = 4
 CONNECT_RETRY_S = 0.7
@@ -161,11 +163,34 @@ class TreeDumper:
         self.hello = hello
         return hello
 
+    def _stop_pixel_use_uiad(self) -> None:
+        """Best-effort graceful stop of a lingering idle pixel-use UiAutomationDaemon holding the singleton."""
+        try:
+            self.adb.shell(
+                f"test -f {PIXEL_USE_UIAD_JAR} && /system/bin/app_process"
+                f" -Djava.class.path={PIXEL_USE_UIAD_JAR} {PIXEL_USE_UIAD_DIR}"
+                " com.pixeluse.helper.UiAutomationDaemon --stop >/dev/null 2>&1 || true",
+                timeout=min(self.timeout, 5.0),
+            )
+        except Exception:
+            pass
+
+    def _start_process_with_recovery(self) -> dict:
+        try:
+            return self._start_process()
+        except TreeError as exc:
+            if "could not connect UiAutomation" not in str(exc):
+                raise
+            self._log(f"treedump UiAutomation busy ({exc}); stopping idle pixel-use daemon and retrying")
+            self._stop_process()
+            self._stop_pixel_use_uiad()
+            return self._start_process()
+
     def start(self) -> dict:
         """push(), spawn `adb -s S shell CLASSPATH=… app_process … Main --text-packages …`, read the hello line; returns it."""
         with self._lock:
             self.push()
-            return self._start_process()
+            return self._start_process_with_recovery()
 
     def _stop_process(self) -> None:
         if self.proc is None:
@@ -280,7 +305,7 @@ class TreeDumper:
                 self.push()
                 for attempt in range(CONNECT_ATTEMPTS):
                     try:
-                        self._start_process()
+                        self._start_process_with_recovery()
                         break
                     except TreeError:
                         self._stop_process()
